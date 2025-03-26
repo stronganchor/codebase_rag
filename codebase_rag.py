@@ -168,7 +168,7 @@ def cosine_similarity(vec1, vec2):
         return 0
     return np.dot(vec1, vec2) / (norm1 * norm2)
 
-def generate_enhanced_prompt(query_text, embeddings_data, top_k=3):
+def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, top_k=3):
     query_embedding = embed_chunk(query_text)
     if query_embedding is None:
         messagebox.showerror("Error", "Failed to embed the query.")
@@ -183,7 +183,11 @@ def generate_enhanced_prompt(query_text, embeddings_data, top_k=3):
     for sim, item in selected:
         context_texts.append(f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}")
         print(f"[DEBUG] Selected chunk (sim={sim:.4f}) from {item['file']} chunk {item['chunk_index']}")
-    enhanced_prompt = f"User Query:\n{query_text}\n\nRelevant Code Context:\n" + "\n\n".join(context_texts)
+    enhanced_prompt = (
+        f"User Query:\n{query_text}\n\n"
+        f"Relevant Code Context:\n" + "\n\n".join(context_texts) +
+        f"\n\nCustom Instructions:\n{custom_instructions}"
+    )
     return enhanced_prompt
 
 def compute_repo_hash(repo_path, extensions):
@@ -291,7 +295,8 @@ def generate_prompt_button():
     if not global_embeddings_data:
         messagebox.showerror("Error", "No embeddings data available. Please process a repository first.")
         return
-    enhanced = generate_enhanced_prompt(query, global_embeddings_data, top_k=3)
+    custom_instructions = custom_instructions_text.get("1.0", tk.END).strip()
+    enhanced = generate_enhanced_prompt(query, global_embeddings_data, custom_instructions, top_k=3)
     if enhanced:
         enhanced_prompt_text.delete("1.0", tk.END)
         enhanced_prompt_text.insert(tk.END, enhanced)
@@ -363,22 +368,43 @@ embedding_output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 right_frame = tk.Frame(root)
 right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
 right_frame.columnconfigure(0, weight=1)
-right_frame.rowconfigure(1, weight=1)
+right_frame.rowconfigure(3, weight=1)
+
+# Custom Instructions frame in right column
+frame_custom = tk.LabelFrame(right_frame, text="Custom Instructions to Include in Every Prompt")
+frame_custom.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+custom_instructions_text = tk.Text(frame_custom, wrap=tk.WORD, height=7)
+custom_instructions_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+default_instructions = """IMPORTANT CUSTOM INSTRUCTIONS FOR AI CHAT SESSION:
+When providing code changes, indicate the relative path of the file or files that need changes.
+
+For each file that needs changing:
+- If you are only changing one line, provide just the updated line with context
+- If you are changing more than one line, provide either entire updated functions or the entire updated code file
+
+General notes:
+- Provide minimal code changes.  Avoid making unnecessary changes that will contribute to diff noise.
+- Only add comments that are necessary for understanding the logical flow of the code and adhere to documentation best practices.
+- Do not add comments that point out to the user where the updated / changed parts of the code are, such as: // Updated line of code goes here
+
+If you are unable to complete the requested task due to lack of code context, include in your response a request to see additional code, and if possible include the file and/or function names where you expect the necessary code context to be stored.
+
+END CUSTOM INSTRUCTIONS"""
+custom_instructions_text.insert(tk.END, default_instructions)
 
 # Query prompt input frame in right column
 frame_query = tk.LabelFrame(right_frame, text="Enter Query Prompt (e.g., Request for code changes or question about the code)")
-frame_query.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+frame_query.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
 query_prompt_text = tk.Text(frame_query, wrap=tk.WORD, height=5)
 query_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
 # Generate enhanced prompt button in right column
 gen_prompt_btn = tk.Button(right_frame, text="Generate Enhanced Prompt", command=generate_prompt_button)
-gen_prompt_btn.grid(row=1, column=0, padx=5, pady=10, sticky="n")
+gen_prompt_btn.grid(row=2, column=0, padx=5, pady=10, sticky="n")
 
 # Enhanced prompt output frame in right column
 frame_final = tk.LabelFrame(right_frame, text="Enhanced Prompt Output (Copy/Paste this to your AI model)")
-frame_final.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
-right_frame.rowconfigure(2, weight=1)
+frame_final.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
 enhanced_prompt_text = tk.Text(frame_final, wrap=tk.WORD, height=15)
 enhanced_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 # Copy button below the enhanced prompt output field
