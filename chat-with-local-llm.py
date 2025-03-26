@@ -43,11 +43,19 @@ def send_request(user_text):
     When done, it schedules an update to the conversation log on the main thread.
     """
     global waiting
+    # Choose the port based on the selected model
+    selected_model = model_var.get()
+    if selected_model == "deepseek-r1:7b":
+        port = 11437
+    else:
+        port = 11434
+
+    url = f"http://localhost:{port}/api/chat"
     try:
         response = requests.post(
-            "http://localhost:11434/api/chat",
+            url,
             json={
-                "model": model_var.get(),  # Use the selected model from the dropdown
+                "model": selected_model,
                 "messages": [{"role": "user", "content": user_text}],
                 "stream": False,
                 "options": {
@@ -163,7 +171,7 @@ def create_gui():
     # Define available models; default is deepseek-r1:7b and second option is qwq
     model_options = ["deepseek-r1:7b", "qwq"]
     model_var = tk.StringVar(root)
-    model_var.set(model_options[0])  # R1 (deepseek) as default
+    model_var.set(model_options[0])  # Default model is deepseek-r1:7b
 
     model_dropdown = tk.OptionMenu(top_frame, model_var, *model_options)
     model_dropdown.pack(side=tk.LEFT, padx=5)
