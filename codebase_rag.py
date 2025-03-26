@@ -168,6 +168,7 @@ def cosine_similarity(vec1, vec2):
         return 0
     return np.dot(vec1, vec2) / (norm1 * norm2)
 
+# -------------------- UPDATED generate_enhanced_prompt --------------------
 def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, top_k=3,
                              max_prompt_tokens=128000, include_entire_codebase=False):
     query_embedding = embed_chunk(query_text)
@@ -221,7 +222,6 @@ def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, t
 
     enhanced_prompt = header + context_text + footer
     return enhanced_prompt
-
 
 def compute_repo_hash(repo_path, extensions):
     """Compute a hash based on file paths, modification times, and sizes."""
@@ -312,6 +312,8 @@ def start_embedding_thread():
             embedding_output_text.insert(tk.END, f"\nError saving output: {e}\n")
         progress_var.set(100)
         status_label.config(text="Processing complete.")
+        # Optionally update the state of the entire codebase checkbox
+        update_entire_codebase_option_state()
 
     threading.Thread(target=run_processing, daemon=True).start()
 
@@ -350,12 +352,30 @@ def generate_prompt_button():
             print(f"[DEBUG] Error saving enhanced prompt: {e}")
         messagebox.showinfo("Success", "Enhanced prompt generated!")
 
-
 def copy_enhanced_prompt():
     content = enhanced_prompt_text.get("1.0", tk.END)
     root.clipboard_clear()
     root.clipboard_append(content)
     messagebox.showinfo("Copied", "Enhanced prompt copied to clipboard!")
+
+def update_entire_codebase_option_state():
+    if global_embeddings_data:
+        header = f"User Query:\n{query_prompt_text.get('1.0', tk.END).strip()}\n\nRelevant Code Context:\n"
+        footer = f"\n\nCustom Instructions:\n{custom_instructions_text.get('1.0', tk.END).strip()}"
+        total_context = ""
+        for item in global_embeddings_data:
+            total_context += f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}\n\n"
+        total_prompt = header + total_context + footer
+        estimated_tokens = len(total_prompt) // 4
+        try:
+            max_tokens = int(max_prompt_tokens_var.get())
+        except:
+            max_tokens = 128000
+        if estimated_tokens > max_tokens:
+            entire_codebase_checkbox.config(state="disabled")
+            entire_codebase_var.set(False)
+        else:
+            entire_codebase_checkbox.config(state="normal")
 
 # -------------------- SETUP GUI --------------------
 root = tk.Tk()
@@ -412,7 +432,7 @@ embedding_output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 right_frame = tk.Frame(root)
 right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
 right_frame.columnconfigure(0, weight=1)
-right_frame.rowconfigure(3, weight=1)
+right_frame.rowconfigure(4, weight=1)
 
 # Custom Instructions frame in right column
 frame_custom = tk.LabelFrame(right_frame, text="Custom Instructions to Include in Every Prompt")
@@ -442,13 +462,24 @@ frame_query.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
 query_prompt_text = tk.Text(frame_query, wrap=tk.WORD, height=5)
 query_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
+# Prompt Generation Options frame in right column
+frame_prompt_options = tk.LabelFrame(right_frame, text="Prompt Generation Options")
+frame_prompt_options.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
+tk.Label(frame_prompt_options, text="Max Prompt Tokens:").grid(row=0, column=0, padx=5, pady=5)
+max_prompt_tokens_var = tk.StringVar(value="128000")
+max_prompt_tokens_entry = tk.Entry(frame_prompt_options, textvariable=max_prompt_tokens_var, width=10)
+max_prompt_tokens_entry.grid(row=0, column=1, padx=5, pady=5)
+entire_codebase_var = tk.BooleanVar(value=False)
+entire_codebase_checkbox = tk.Checkbutton(frame_prompt_options, text="Include Entire Codebase", variable=entire_codebase_var)
+entire_codebase_checkbox.grid(row=1, column=0, columnspan=2, padx=5, pady=5)
+
 # Generate enhanced prompt button in right column
 gen_prompt_btn = tk.Button(right_frame, text="Generate Enhanced Prompt", command=generate_prompt_button)
-gen_prompt_btn.grid(row=2, column=0, padx=5, pady=10, sticky="n")
+gen_prompt_btn.grid(row=3, column=0, padx=5, pady=10, sticky="n")
 
 # Enhanced prompt output frame in right column
 frame_final = tk.LabelFrame(right_frame, text="Enhanced Prompt Output (Copy/Paste this to your AI model)")
-frame_final.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
+frame_final.grid(row=4, column=0, sticky="nsew", padx=5, pady=5)
 enhanced_prompt_text = tk.Text(frame_final, wrap=tk.WORD, height=15)
 enhanced_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 # Copy button below the enhanced prompt output field
