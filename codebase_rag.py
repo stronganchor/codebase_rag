@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import threading
+import hashlib
 
 # -------------------- CONFIGURATION --------------------
 RECENT_REPOS_FILE = "recent_repos.json"
@@ -77,6 +78,7 @@ def clone_or_update_repo(repo_url):
 def list_code_files(repo_path, extensions):
     files = []
     for root, dirs, filenames in os.walk(repo_path):
+        # Filter out directories to skip (case-insensitive)
         dirs[:] = [d for d in dirs if d.lower() not in [skip.lower() for skip in SKIP_DIRS]]
         for f in filenames:
             for ext in extensions:
@@ -184,6 +186,20 @@ def generate_enhanced_prompt(query_text, embeddings_data, top_k=3):
     enhanced_prompt = f"User Query:\n{query_text}\n\nRelevant Code Context:\n" + "\n\n".join(context_texts)
     return enhanced_prompt
 
+def compute_repo_hash(repo_path, extensions):
+    """Compute a hash based on file paths, modification times, and sizes."""
+    files = list_code_files(repo_path, extensions)
+    files.sort()  # Ensure a consistent order
+    hash_input = ""
+    for file in files:
+        try:
+            mtime = os.path.getmtime(file)
+            size = os.path.getsize(file)
+            hash_input += f"{file}:{mtime}:{size};"
+        except Exception as e:
+            print(f"[DEBUG] Failed to get mtime/size for {file}: {e}")
+    return hashlib.md5(hash_input.encode("utf-8")).hexdigest()
+
 # -------------------- GUI FUNCTIONS --------------------
 def update_progress(file_done, total_files):
     progress = int((file_done / total_files) * 100)
@@ -192,6 +208,7 @@ def update_progress(file_done, total_files):
     root.update_idletasks()
 
 def start_embedding_thread():
+    global global_embeddings_data  # to allow assignment from within this function
     repo_url = repo_url_var.get().strip()
     if not repo_url:
         messagebox.showerror("Input Error", "Please enter or select a repository URL.")
@@ -204,6 +221,36 @@ def start_embedding_thread():
     if not local_repo:
         return
 
+    # Determine a unique embed file path based on the repository name
+    repo_name = os.path.basename(os.path.normpath(local_repo))
+    embed_file = os.path.join(os.getcwd(), f"embedding_output_{repo_name}.json")
+
+    # Compute the current hash of the repository
+    current_hash = compute_repo_hash(local_repo, FILE_EXTENSIONS)
+    
+    # Check for an existing embed file
+    if os.path.exists(embed_file):
+        try:
+            with open(embed_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            stored_hash = data.get("repo_hash", None)
+            if stored_hash == current_hash:
+                embedding_output_text.delete("1.0", tk.END)
+                embedding_output_text.insert(tk.END, "No changes detected in the codebase. Using cached embeddings.\n")
+                global_embeddings_data = data.get("embeddings", [])
+                return
+            else:
+                answer = messagebox.askyesno("Out-of-date Embeddings",
+                                             "An existing embedding file is out-of-date. Do you want to refresh the embeddings?")
+                if not answer:
+                    embedding_output_text.delete("1.0", tk.END)
+                    embedding_output_text.insert(tk.END, "Using out-of-date embeddings from file.\n")
+                    global_embeddings_data = data.get("embeddings", [])
+                    return
+        except Exception as e:
+            print(f"[DEBUG] Error reading existing embed file: {e}")
+
+    # Proceed with embedding if no up-to-date file exists
     embedding_output_text.delete("1.0", tk.END)
     embedding_output_text.insert(tk.END, f"Processing repository at {local_repo}...\n")
     embedding_output_text.update()
@@ -220,11 +267,10 @@ def start_embedding_thread():
         global global_embeddings_data
         global_embeddings_data = process_repo_with_progress(local_repo, progress_callback=update_progress, max_chars=max_chars)
         embedding_output_text.insert(tk.END, f"\nProcessed {len(global_embeddings_data)} chunks.\n")
-        output_file = os.path.join(os.getcwd(), "embedding_output.json")
         try:
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(global_embeddings_data, f, indent=2)
-            embedding_output_text.insert(tk.END, f"\nEmbeddings saved to: {output_file}\n")
+            with open(embed_file, "w", encoding="utf-8") as f:
+                json.dump({"repo_hash": current_hash, "embeddings": global_embeddings_data}, f, indent=2)
+            embedding_output_text.insert(tk.END, f"\nEmbeddings saved to: {embed_file}\n")
         except Exception as e:
             embedding_output_text.insert(tk.END, f"\nError saving output: {e}\n")
         progress_var.set(100)
