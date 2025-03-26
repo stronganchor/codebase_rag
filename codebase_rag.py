@@ -95,7 +95,8 @@ def list_code_files(repo_path, extensions):
 
 def read_file(filepath):
     try:
-        content =  open(filepath, "r", encoding="utf-8", errors="ignore").read()
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
         print(f"[DEBUG] Read {len(content)} characters from {filepath}")
         return content
     except Exception as e:
@@ -111,14 +112,24 @@ def embed_chunk(chunk, model=EMBED_MODEL):
     payload = {"model": model, "input": chunk}
     try:
         response = requests.post(EMBED_API_URL, json=payload, timeout=30)
-        response.raise_for_status()
-        embedding = response.json().get("embedding", None)
-        if embedding is None:
-            print("[DEBUG] No embedding returned for a chunk.")
+        print(f"[DEBUG] Embed API response status: {response.status_code}")
+        response_text = response.text.strip()
+        if response.status_code != 200:
+            print(f"[DEBUG] Non-200 response: {response_text}")
+            return None
+        data = response.json()
+        # Check for "embeddings" (plural) instead of "embedding"
+        embeddings = data.get("embeddings", None)
+        if embeddings is None or not embeddings:
+            print(f"[DEBUG] No embeddings returned for chunk. Response: {response_text}")
+            return None
+        # If multiple embeddings are returned, take the first one
+        embedding = embeddings[0]
         return embedding
     except Exception as e:
-        print(f"[DEBUG] Embedding API error: {e}")
+        print(f"[DEBUG] Exception during embedding API call: {e}")
         return None
+
 
 def process_repo(repo_local_path):
     """Process the repository: traverse files, read content, chunk, and embed."""
@@ -132,7 +143,11 @@ def process_repo(repo_local_path):
             print(f"[DEBUG] File {file} is empty or could not be read.")
             continue
         chunks = chunk_text(content)
+        print(f"[DEBUG] File {file} produced {len(chunks)} chunks.")
         for idx, chunk in enumerate(chunks):
+            # Log chunk length and a preview
+            preview = chunk.replace('\n', ' ')[:100]
+            print(f"[DEBUG] Embedding chunk {idx} of file {file[:60]}... (length: {len(chunk)} chars, preview: '{preview}')")
             embedding = embed_chunk(chunk)
             if embedding:
                 results.append({
@@ -141,7 +156,7 @@ def process_repo(repo_local_path):
                     "chunk": chunk,
                     "embedding": embedding
                 })
-                print(f"[DEBUG] Embedded chunk {idx} of {file} (Embedding length: {len(embedding)}).")
+                print(f"[DEBUG] Successfully embedded chunk {idx} (Embedding length: {len(embedding)}).")
             else:
                 print(f"[DEBUG] Failed to embed chunk {idx} of {file}.")
     print(f"[DEBUG] Total chunks embedded: {len(results)}")
@@ -170,6 +185,7 @@ def generate_enhanced_prompt(query_text, embeddings_data, top_k=3):
     context_texts = []
     for sim, item in selected:
         context_texts.append(f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}")
+        print(f"[DEBUG] Selected chunk (sim={sim:.4f}) from {item['file']} chunk {item['chunk_index']}")
     enhanced_prompt = f"User Query:\n{query_text}\n\nRelevant Code Context:\n" + "\n\n".join(context_texts)
     return enhanced_prompt
 
