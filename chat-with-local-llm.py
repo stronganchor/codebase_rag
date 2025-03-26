@@ -1,9 +1,8 @@
 import tkinter as tk
-from tkinter import font as tkFont
 import requests
 import threading
 import time
-import re
+import re  # For processing <think> tags
 
 # Global variables to control the waiting timer
 waiting = False
@@ -62,6 +61,23 @@ def send_request(user_text):
     # Update the GUI in the main thread
     root.after(0, update_conversation, bot_reply, reasoning_note)
 
+def insert_bot_message(message):
+    """
+    Inserts the bot message into the conversation log,
+    formatting <think></think> parts differently.
+    """
+    pos = 0
+    for match in re.finditer(r"<think>(.*?)</think>", message):
+        # Insert text before the <think> block
+        if match.start() > pos:
+            conversation_log.insert(tk.END, message[pos:match.start()])
+        # Insert the <think> block in italic gray text
+        conversation_log.insert(tk.END, match.group(1), "think")
+        pos = match.end()
+    # Insert any remaining text after the last <think> block
+    if pos < len(message):
+        conversation_log.insert(tk.END, message[pos:])
+
 def update_conversation(bot_reply, reasoning_note):
     """
     Updates the conversation log with the bot's reply and reasoning time, then stops the timer.
@@ -69,21 +85,9 @@ def update_conversation(bot_reply, reasoning_note):
     global waiting
     waiting = False  # Stop the timer
     conversation_log.config(state=tk.NORMAL)
-    conversation_log.insert(tk.END, f"{reasoning_note}\n", 'regular')
-    conversation_log.insert(tk.END, "Bot: ", 'bold')
-    
-    # Process the bot's reply to handle <think> tags
-    parts = re.split(r'(<think>|</think>)', bot_reply)
-    italic = False
-    for part in parts:
-        if part == '<think>':
-            italic = True
-        elif part == '</think>':
-            italic = False
-        else:
-            tag = 'think' if italic else 'regular'
-            conversation_log.insert(tk.END, part, tag)
-    
+    conversation_log.insert(tk.END, f"{reasoning_note}\n")
+    conversation_log.insert(tk.END, "Bot: ", "bot_label")
+    insert_bot_message(bot_reply)
     conversation_log.insert(tk.END, "\n\n")
     conversation_log.config(state=tk.DISABLED)
     conversation_log.yview(tk.END)  # Auto-scroll to the latest message
@@ -103,10 +107,10 @@ def send_message():
     # Clear the input box for the next message
     input_box.delete("1.0", tk.END)
 
-    # Display user's message in the conversation log
+    # Display user's message in the conversation log with bold "You:" label
     conversation_log.config(state=tk.NORMAL)
-    conversation_log.insert(tk.END, "You: ", 'bold')
-    conversation_log.insert(tk.END, f"{user_text}\n", 'regular')
+    conversation_log.insert(tk.END, "You: ", "user_label")
+    conversation_log.insert(tk.END, f"{user_text}\n")
     conversation_log.config(state=tk.DISABLED)
     conversation_log.yview(tk.END)  # Auto-scroll to the latest message
 
@@ -127,25 +131,38 @@ def create_gui():
     root = tk.Tk()
     root.title("QwQ Chat")
 
-    # Define fonts
-    bold_font = tkFont.Font(root=root, family="Helvetica", weight="bold")
-    italic_font = tkFont.Font(root=root, family="Helvetica", slant="italic")
-
     # Frame for the conversation log
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
     # Text widget for conversation log (read-only)
-    conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.DISABLED)
+    conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.NORMAL)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    # Configure text tags for formatting
+    conversation_log.tag_configure("user_label", font=("Helvetica", 10, "bold"))
+    conversation_log.tag_configure("bot_label", font=("Helvetica", 10, "bold"))
+    conversation_log.tag_configure("think", foreground="gray", font=("Helvetica", 10, "italic"))
+    conversation_log.config(state=tk.DISABLED)
 
     # Add a vertical scrollbar for the conversation log
     scrollbar = tk.Scrollbar(frame_log, command=conversation_log.yview)
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     conversation_log.config(yscrollcommand=scrollbar.set)
 
-    # Define tags for text formatting
-    conversation_log.tag_configure('bold', font=bold_font)
-    conversation_log.tag_configure('think', font=italic
-::contentReference[oaicite:13]{index=13}
- 
+    # Waiting label for displaying elapsed time
+    waiting_label = tk.Label(root, text="", font=("Helvetica", 10))
+    waiting_label.pack(pady=5)
+
+    # Input box for user text
+    input_box = tk.Text(root, height=3, wrap=tk.WORD)
+    input_box.pack(padx=10, pady=5, fill=tk.X)
+
+    # Send button
+    send_button = tk.Button(root, text="Send", command=send_message)
+    send_button.pack(pady=5)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    create_gui()
