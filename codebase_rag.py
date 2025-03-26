@@ -42,7 +42,7 @@ def load_recent_repos():
 def save_recent_repos(repo_list):
     try:
         with open(RECENT_REPOS_FILE, "w", encoding="utf-8") as f:
-            json.dump(repo_list, f)
+            json.dump(repo_list, repo, indent=2)
     except Exception as e:
         print(f"[DEBUG] Failed to save recent repos: {e}")
 
@@ -75,11 +75,8 @@ def clone_or_update_repo(repo_url):
     return local_path
 
 def list_code_files(repo_path, extensions):
-    """Recursively traverse repo_path and return files matching the extensions,
-       ignoring directories listed in SKIP_DIRS."""
     files = []
     for root, dirs, filenames in os.walk(repo_path):
-        # Filter out directories to skip (case-insensitive)
         dirs[:] = [d for d in dirs if d.lower() not in [skip.lower() for skip in SKIP_DIRS]]
         for f in filenames:
             for ext in extensions:
@@ -102,8 +99,6 @@ def read_file(filepath):
         return ""
 
 def chunk_file_text(text, max_chars):
-    """Return the whole text as one chunk if it's under max_chars,
-       otherwise split into chunks of size max_chars."""
     if len(text) <= max_chars:
         print(f"[DEBUG] File length {len(text)} <= max_chars {max_chars}, using whole file as one chunk.")
         return [text]
@@ -132,8 +127,6 @@ def embed_chunk(chunk, model=EMBED_MODEL):
         return None
 
 def process_repo_with_progress(repo_local_path, progress_callback, max_chars):
-    """Process the repository: traverse files, read content, chunk, and embed.
-       Update progress after each file."""
     code_files = list_code_files(repo_local_path, FILE_EXTENSIONS)
     total_files = len(code_files)
     results = []
@@ -144,7 +137,6 @@ def process_repo_with_progress(repo_local_path, progress_callback, max_chars):
             print(f"[DEBUG] File {file} is empty or unreadable.")
             progress_callback(file_idx+1, total_files)
             continue
-        # Use whole file as a single chunk unless it exceeds max_chars
         chunks = chunk_file_text(content, max_chars)
         print(f"[DEBUG] File {file} produced {len(chunks)} chunk(s).")
         for idx, chunk in enumerate(chunks):
@@ -216,7 +208,6 @@ def start_embedding_thread():
     output_text.insert(tk.END, f"Processing repository at {local_repo}...\n")
     output_text.update()
 
-    # Get max tokens from the GUI field and compute max_chars (approx. 4 chars per token)
     try:
         max_tokens = int(max_tokens_var.get())
     except Exception as e:
@@ -265,61 +256,86 @@ def generate_prompt_button():
             print(f"[DEBUG] Error saving enhanced prompt: {e}")
         messagebox.showinfo("Success", "Enhanced prompt generated!")
 
+def copy_enhanced_prompt():
+    content = enhanced_prompt_text.get("1.0", tk.END)
+    root.clipboard_clear()
+    root.clipboard_append(content)
+    messagebox.showinfo("Copied", "Enhanced prompt copied to clipboard!")
+
 # -------------------- SETUP GUI --------------------
 root = tk.Tk()
 root.title("Codebase Embedding & Retrieval GUI")
 
-# Frame for repository selection
-frame_repo = tk.LabelFrame(root, text="Select GitHub Repository URL")
-frame_repo.pack(fill=tk.X, padx=10, pady=5)
+# Configure grid layout for two columns
+root.columnconfigure(0, weight=1)
+root.columnconfigure(1, weight=1)
+root.rowconfigure(0, weight=1)
 
+# Left frame for inputs and controls
+left_frame = tk.Frame(root)
+left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+left_frame.columnconfigure(0, weight=1)
+
+# Right frame for outputs
+right_frame = tk.Frame(root)
+right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+right_frame.columnconfigure(0, weight=1)
+right_frame.rowconfigure(0, weight=1)
+right_frame.rowconfigure(1, weight=1)
+
+# Repository selection frame in left column
+frame_repo = tk.LabelFrame(left_frame, text="Select GitHub Repository URL")
+frame_repo.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
 repo_url_var = tk.StringVar()
 recent_repos = load_recent_repos()
 repo_dropdown = ttk.Combobox(frame_repo, textvariable=repo_url_var, width=60)
 repo_dropdown["values"] = recent_repos
-repo_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
-
+repo_dropdown.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 browse_btn = tk.Button(frame_repo, text="Browse Folder", command=browse_repo)
-browse_btn.pack(side=tk.LEFT, padx=5, pady=5)
+browse_btn.grid(row=0, column=1, padx=5, pady=5)
 
-# Frame for chunking settings (max chunk size in tokens)
-frame_chunk = tk.LabelFrame(root, text="Chunking Settings")
-frame_chunk.pack(fill=tk.X, padx=10, pady=5)
-tk.Label(frame_chunk, text="Max Chunk Size (tokens):").pack(side=tk.LEFT, padx=5)
+# Chunking settings frame in left column
+frame_chunk = tk.LabelFrame(left_frame, text="Chunking Settings")
+frame_chunk.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
+tk.Label(frame_chunk, text="Max Chunk Size (tokens):").grid(row=0, column=0, padx=5, pady=5)
 max_tokens_var = tk.IntVar(value=128000)
 max_tokens_entry = tk.Entry(frame_chunk, textvariable=max_tokens_var, width=10)
-max_tokens_entry.pack(side=tk.LEFT, padx=5)
+max_tokens_entry.grid(row=0, column=1, padx=5, pady=5)
 
-# Progress bar and status label
+# Progress bar and status label in left column
 progress_var = tk.IntVar(value=0)
-progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate", variable=progress_var)
-progress_bar.pack(pady=5)
-status_label = tk.Label(root, text="No processing yet.")
-status_label.pack(pady=5)
+progress_bar = ttk.Progressbar(left_frame, orient="horizontal", length=400, mode="determinate", variable=progress_var)
+progress_bar.grid(row=2, column=0, padx=5, pady=5)
+status_label = tk.Label(left_frame, text="No processing yet.")
+status_label.grid(row=3, column=0, padx=5, pady=5)
 
-process_btn = tk.Button(root, text="Process Codebase (Chunk & Embed)", command=start_embedding_thread)
-process_btn.pack(pady=10)
+# Process button in left column
+process_btn = tk.Button(left_frame, text="Process Codebase (Chunk & Embed)", command=start_embedding_thread)
+process_btn.grid(row=4, column=0, padx=5, pady=10)
 
-# Output text field for process logs
-frame_output = tk.LabelFrame(root, text="Embedding Process Output")
-frame_output.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-output_text = tk.Text(frame_output, wrap=tk.WORD, height=15)
-output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-# Frame for query prompt input
-frame_query = tk.LabelFrame(root, text="Enter Query Prompt (e.g., Request for code changes or question about the code)")
-frame_query.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+# Query prompt frame in left column
+frame_query = tk.LabelFrame(left_frame, text="Enter Query Prompt (e.g., Request for code changes or question about the code)")
+frame_query.grid(row=5, column=0, sticky="ew", padx=5, pady=5)
 query_prompt_text = tk.Text(frame_query, wrap=tk.WORD, height=5)
 query_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-# Button to generate enhanced prompt
-gen_prompt_btn = tk.Button(root, text="Generate Enhanced Prompt", command=generate_prompt_button)
-gen_prompt_btn.pack(pady=10)
+# Generate enhanced prompt button in left column
+gen_prompt_btn = tk.Button(left_frame, text="Generate Enhanced Prompt", command=generate_prompt_button)
+gen_prompt_btn.grid(row=6, column=0, padx=5, pady=10)
 
-# Frame for enhanced prompt output
-frame_final = tk.LabelFrame(root, text="Enhanced Prompt Output (Copy/Paste this to your AI model)")
-frame_final.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+# Embedding process output frame in right column
+frame_output = tk.LabelFrame(right_frame, text="Embedding Process Output")
+frame_output.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+output_text = tk.Text(frame_output, wrap=tk.WORD, height=15)
+output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+# Enhanced prompt output frame in right column
+frame_final = tk.LabelFrame(right_frame, text="Enhanced Prompt Output (Copy/Paste this to your AI model)")
+frame_final.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
 enhanced_prompt_text = tk.Text(frame_final, wrap=tk.WORD, height=15)
 enhanced_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+# Copy button below the enhanced prompt output field
+copy_btn = tk.Button(frame_final, text="Copy Enhanced Prompt", command=copy_enhanced_prompt)
+copy_btn.pack(padx=5, pady=5)
 
 root.mainloop()
