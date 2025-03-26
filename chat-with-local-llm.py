@@ -1,23 +1,28 @@
 import tkinter as tk
 import requests
 import threading
+import time
 
-# Global variables to control the waiting animation
+# Global variables to control the waiting timer
 waiting = False
-animation_index = 0
+start_time = None
 
-def animate_status():
+def update_waiting_label():
     """
-    Updates the waiting label with an ellipsis animation.
+    Updates the waiting label with the elapsed time.
     This function schedules itself until waiting is False.
     """
-    global waiting, animation_index
+    global waiting, start_time
     if waiting:
-        states = ["", ".", "..", "..."]
-        waiting_label.config(text="Waiting" + states[animation_index % len(states)])
-        animation_index += 1
-        # Update every 500 ms
-        root.after(500, animate_status)
+        elapsed_time = time.time() - start_time
+        if elapsed_time < 60:
+            waiting_label.config(text=f"Waiting: {int(elapsed_time)}s")
+        else:
+            minutes = int(elapsed_time) // 60
+            seconds = int(elapsed_time) % 60
+            waiting_label.config(text=f"Waiting: {minutes}m {seconds}s")
+        # Update every second
+        root.after(1000, update_waiting_label)
     else:
         waiting_label.config(text="")
 
@@ -35,6 +40,7 @@ def send_request(user_text):
                 "messages": [{"role": "user", "content": user_text}],
                 "stream": False
             }
+            # No timeout parameter to allow indefinite waiting
         )
         response.raise_for_status()
         data = response.json()
@@ -42,27 +48,37 @@ def send_request(user_text):
     except requests.exceptions.RequestException as e:
         bot_reply = f"Error: {str(e)}"
     
+    # Calculate reasoning time
+    reasoning_time = time.time() - start_time
+    if reasoning_time < 60:
+        reasoning_note = f"Reasoned for {int(reasoning_time)}s."
+    else:
+        minutes = int(reasoning_time) // 60
+        seconds = int(reasoning_time) % 60
+        reasoning_note = f"Reasoned for {minutes}m {seconds}s."
+    
     # Update the GUI in the main thread
-    root.after(0, update_conversation, bot_reply)
+    root.after(0, update_conversation, bot_reply, reasoning_note)
 
-def update_conversation(bot_reply):
+def update_conversation(bot_reply, reasoning_note):
     """
-    Updates the conversation log with the bot's reply and stops the animation.
+    Updates the conversation log with the bot's reply and reasoning time, then stops the timer.
     """
     global waiting
-    waiting = False  # Stop the animation
+    waiting = False  # Stop the timer
     conversation_log.config(state=tk.NORMAL)
-    conversation_log.insert(tk.END, f"Bot: {bot_reply}\n\n")
+    conversation_log.insert(tk.END, f"{reasoning_note}\nBot: {bot_reply}\n\n")
     conversation_log.config(state=tk.DISABLED)
+    conversation_log.yview(tk.END)  # Auto-scroll to the latest message
     waiting_label.config(text="")  # Clear waiting label
 
 def send_message():
     """
     Called when the user clicks 'Send'. It retrieves the input,
-    updates the conversation log, starts the waiting animation,
+    updates the conversation log, starts the waiting timer,
     and launches a thread to perform the network request.
     """
-    global waiting, animation_index
+    global waiting, start_time
     user_text = input_box.get("1.0", tk.END).strip()
     if not user_text:
         return  # Do nothing if the input is empty
@@ -74,11 +90,12 @@ def send_message():
     conversation_log.config(state=tk.NORMAL)
     conversation_log.insert(tk.END, f"You: {user_text}\n")
     conversation_log.config(state=tk.DISABLED)
+    conversation_log.yview(tk.END)  # Auto-scroll to the latest message
 
-    # Start waiting animation
+    # Start waiting timer
     waiting = True
-    animation_index = 0
-    animate_status()
+    start_time = time.time()
+    update_waiting_label()
 
     # Start the network call in a separate thread
     thread = threading.Thread(target=send_request, args=(user_text,))
@@ -100,12 +117,12 @@ def create_gui():
     conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.DISABLED)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    # Scrollbar for conversation log
+    # Add a vertical scrollbar for the conversation log
     scrollbar = tk.Scrollbar(frame_log, command=conversation_log.yview)
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     conversation_log.config(yscrollcommand=scrollbar.set)
 
-    # Waiting label for animation
+    # Waiting label for displaying elapsed time
     waiting_label = tk.Label(root, text="", font=("Helvetica", 10))
     waiting_label.pack(pady=5)
 
