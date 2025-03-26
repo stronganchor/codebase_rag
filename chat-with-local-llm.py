@@ -39,7 +39,10 @@ def send_request(user_text):
             json={
                 "model": "qwq",  # Ensure this matches your Ollama model name
                 "messages": [{"role": "user", "content": user_text}],
-                "stream": False
+                "stream": False,
+                "options": {
+                    "num_ctx": 32768  # Set the context window token limit
+                }
             }
             # No timeout parameter to allow indefinite waiting
         )
