@@ -42,7 +42,7 @@ def load_recent_repos():
 def save_recent_repos(repo_list):
     try:
         with open(RECENT_REPOS_FILE, "w", encoding="utf-8") as f:
-            json.dump(repo_list, repo, indent=2)
+            json.dump(repo_list, f, indent=2)
     except Exception as e:
         print(f"[DEBUG] Failed to save recent repos: {e}")
 
@@ -204,9 +204,9 @@ def start_embedding_thread():
     if not local_repo:
         return
 
-    output_text.delete("1.0", tk.END)
-    output_text.insert(tk.END, f"Processing repository at {local_repo}...\n")
-    output_text.update()
+    embedding_output_text.delete("1.0", tk.END)
+    embedding_output_text.insert(tk.END, f"Processing repository at {local_repo}...\n")
+    embedding_output_text.update()
 
     try:
         max_tokens = int(max_tokens_var.get())
@@ -219,14 +219,14 @@ def start_embedding_thread():
     def run_processing():
         global global_embeddings_data
         global_embeddings_data = process_repo_with_progress(local_repo, progress_callback=update_progress, max_chars=max_chars)
-        output_text.insert(tk.END, f"\nProcessed {len(global_embeddings_data)} chunks.\n")
+        embedding_output_text.insert(tk.END, f"\nProcessed {len(global_embeddings_data)} chunks.\n")
         output_file = os.path.join(os.getcwd(), "embedding_output.json")
         try:
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(global_embeddings_data, f, indent=2)
-            output_text.insert(tk.END, f"\nEmbeddings saved to: {output_file}\n")
+            embedding_output_text.insert(tk.END, f"\nEmbeddings saved to: {output_file}\n")
         except Exception as e:
-            output_text.insert(tk.END, f"\nError saving output: {e}\n")
+            embedding_output_text.insert(tk.END, f"\nError saving output: {e}\n")
         progress_var.set(100)
         status_label.config(text="Processing complete.")
 
@@ -271,17 +271,10 @@ root.columnconfigure(0, weight=1)
 root.columnconfigure(1, weight=1)
 root.rowconfigure(0, weight=1)
 
-# Left frame for inputs and controls
+# Left frame: Embedding step (inputs & output)
 left_frame = tk.Frame(root)
 left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 left_frame.columnconfigure(0, weight=1)
-
-# Right frame for outputs
-right_frame = tk.Frame(root)
-right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-right_frame.columnconfigure(0, weight=1)
-right_frame.rowconfigure(0, weight=1)
-right_frame.rowconfigure(1, weight=1)
 
 # Repository selection frame in left column
 frame_repo = tk.LabelFrame(left_frame, text="Select GitHub Repository URL")
@@ -313,25 +306,33 @@ status_label.grid(row=3, column=0, padx=5, pady=5)
 process_btn = tk.Button(left_frame, text="Process Codebase (Chunk & Embed)", command=start_embedding_thread)
 process_btn.grid(row=4, column=0, padx=5, pady=10)
 
-# Query prompt frame in left column
-frame_query = tk.LabelFrame(left_frame, text="Enter Query Prompt (e.g., Request for code changes or question about the code)")
-frame_query.grid(row=5, column=0, sticky="ew", padx=5, pady=5)
+# Embedding process output frame in left column
+frame_embedding_output = tk.LabelFrame(left_frame, text="Embedding Process Output")
+frame_embedding_output.grid(row=5, column=0, sticky="nsew", padx=5, pady=5)
+left_frame.rowconfigure(5, weight=1)
+embedding_output_text = tk.Text(frame_embedding_output, wrap=tk.WORD, height=15)
+embedding_output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+# Right frame: Prompt Enhancing step (input & output)
+right_frame = tk.Frame(root)
+right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+right_frame.columnconfigure(0, weight=1)
+right_frame.rowconfigure(1, weight=1)
+
+# Query prompt input frame in right column
+frame_query = tk.LabelFrame(right_frame, text="Enter Query Prompt (e.g., Request for code changes or question about the code)")
+frame_query.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
 query_prompt_text = tk.Text(frame_query, wrap=tk.WORD, height=5)
 query_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-# Generate enhanced prompt button in left column
-gen_prompt_btn = tk.Button(left_frame, text="Generate Enhanced Prompt", command=generate_prompt_button)
-gen_prompt_btn.grid(row=6, column=0, padx=5, pady=10)
-
-# Embedding process output frame in right column
-frame_output = tk.LabelFrame(right_frame, text="Embedding Process Output")
-frame_output.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-output_text = tk.Text(frame_output, wrap=tk.WORD, height=15)
-output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+# Generate enhanced prompt button in right column
+gen_prompt_btn = tk.Button(right_frame, text="Generate Enhanced Prompt", command=generate_prompt_button)
+gen_prompt_btn.grid(row=1, column=0, padx=5, pady=10, sticky="n")
 
 # Enhanced prompt output frame in right column
 frame_final = tk.LabelFrame(right_frame, text="Enhanced Prompt Output (Copy/Paste this to your AI model)")
-frame_final.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+frame_final.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+right_frame.rowconfigure(2, weight=1)
 enhanced_prompt_text = tk.Text(frame_final, wrap=tk.WORD, height=15)
 enhanced_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 # Copy button below the enhanced prompt output field
