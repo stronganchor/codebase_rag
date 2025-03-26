@@ -6,6 +6,7 @@ import requests
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import numpy as np
+import threading
 
 # -------------------- CONFIGURATION --------------------
 RECENT_REPOS_FILE = "recent_repos.json"
@@ -118,36 +119,33 @@ def embed_chunk(chunk, model=EMBED_MODEL):
             print(f"[DEBUG] Non-200 response: {response_text}")
             return None
         data = response.json()
-        # Check for "embeddings" (plural) instead of "embedding"
+        # Expect the key "embeddings" and take the first vector
         embeddings = data.get("embeddings", None)
         if embeddings is None or not embeddings:
             print(f"[DEBUG] No embeddings returned for chunk. Response: {response_text}")
             return None
-        # If multiple embeddings are returned, take the first one
-        embedding = embeddings[0]
-        return embedding
+        return embeddings[0]
     except Exception as e:
         print(f"[DEBUG] Exception during embedding API call: {e}")
         return None
 
-
-def process_repo(repo_local_path):
-    """Process the repository: traverse files, read content, chunk, and embed."""
+def process_repo_with_progress(repo_local_path, progress_callback):
+    """Process the repository and update progress after each file."""
     code_files = list_code_files(repo_local_path, FILE_EXTENSIONS)
-    print(f"[DEBUG] Processing {len(code_files)} code files.")
+    total_files = len(code_files)
     results = []
-    for file in code_files:
+    for file_idx, file in enumerate(code_files):
         print(f"[DEBUG] Processing file: {file}")
         content = read_file(file)
         if not content:
-            print(f"[DEBUG] File {file} is empty or could not be read.")
+            print(f"[DEBUG] File {file} is empty or unreadable.")
+            progress_callback(file_idx+1, total_files)
             continue
         chunks = chunk_text(content)
         print(f"[DEBUG] File {file} produced {len(chunks)} chunks.")
         for idx, chunk in enumerate(chunks):
-            # Log chunk length and a preview
             preview = chunk.replace('\n', ' ')[:100]
-            print(f"[DEBUG] Embedding chunk {idx} of file {file[:60]}... (length: {len(chunk)} chars, preview: '{preview}')")
+            print(f"[DEBUG] {os.path.basename(file)}: Embedding chunk {idx} (length: {len(chunk)} chars, preview: '{preview}')")
             embedding = embed_chunk(chunk)
             if embedding:
                 results.append({
@@ -156,9 +154,10 @@ def process_repo(repo_local_path):
                     "chunk": chunk,
                     "embedding": embedding
                 })
-                print(f"[DEBUG] Successfully embedded chunk {idx} (Embedding length: {len(embedding)}).")
+                print(f"[DEBUG] {os.path.basename(file)}: Chunk {idx} embedded successfully.")
             else:
-                print(f"[DEBUG] Failed to embed chunk {idx} of {file}.")
+                print(f"[DEBUG] {os.path.basename(file)}: Failed to embed chunk {idx}.")
+        progress_callback(file_idx+1, total_files)
     print(f"[DEBUG] Total chunks embedded: {len(results)}")
     return results
 
@@ -190,7 +189,14 @@ def generate_enhanced_prompt(query_text, embeddings_data, top_k=3):
     return enhanced_prompt
 
 # -------------------- GUI FUNCTIONS --------------------
-def start_embedding():
+def update_progress(file_done, total_files):
+    progress = int((file_done / total_files) * 100)
+    progress_var.set(progress)
+    status_label.config(text=f"Processed {file_done} of {total_files} files...")
+    # Ensure the GUI updates in the main thread
+    root.update_idletasks()
+
+def start_embedding_thread():
     repo_url = repo_url_var.get().strip()
     if not repo_url:
         messagebox.showerror("Input Error", "Please enter or select a repository URL.")
@@ -207,18 +213,23 @@ def start_embedding():
     output_text.insert(tk.END, f"Processing repository at {local_repo}...\n")
     output_text.update()
 
-    global global_embeddings_data
-    global_embeddings_data = process_repo(local_repo)
-    output_text.insert(tk.END, f"\nProcessed {len(global_embeddings_data)} chunks.\n")
-    
-    # Save the embeddings to a JSON file
-    output_file = os.path.join(os.getcwd(), "embedding_output.json")
-    try:
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(global_embeddings_data, f, indent=2)
-        output_text.insert(tk.END, f"\nEmbeddings saved to: {output_file}\n")
-    except Exception as e:
-        output_text.insert(tk.END, f"\nError saving output: {e}\n")
+    # Run processing in a separate thread
+    def run_processing():
+        global global_embeddings_data
+        global_embeddings_data = process_repo_with_progress(local_repo, progress_callback=update_progress)
+        output_text.insert(tk.END, f"\nProcessed {len(global_embeddings_data)} chunks.\n")
+        output_file = os.path.join(os.getcwd(), "embedding_output.json")
+        try:
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(global_embeddings_data, f, indent=2)
+            output_text.insert(tk.END, f"\nEmbeddings saved to: {output_file}\n")
+        except Exception as e:
+            output_text.insert(tk.END, f"\nError saving output: {e}\n")
+        # Reset progress bar and status label
+        progress_var.set(100)
+        status_label.config(text="Processing complete.")
+
+    threading.Thread(target=run_processing, daemon=True).start()
 
 def browse_repo():
     folder = filedialog.askdirectory()
@@ -261,7 +272,14 @@ repo_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
 browse_btn = tk.Button(frame_repo, text="Browse Folder", command=browse_repo)
 browse_btn.pack(side=tk.LEFT, padx=5, pady=5)
 
-process_btn = tk.Button(root, text="Process Codebase (Chunk & Embed)", command=start_embedding)
+# Progress bar and status label for embedding progress
+progress_var = tk.IntVar(value=0)
+progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate", variable=progress_var)
+progress_bar.pack(pady=5)
+status_label = tk.Label(root, text="No processing yet.")
+status_label.pack(pady=5)
+
+process_btn = tk.Button(root, text="Process Codebase (Chunk & Embed)", command=start_embedding_thread)
 process_btn.pack(pady=10)
 
 # Output text field for process logs
