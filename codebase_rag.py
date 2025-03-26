@@ -168,7 +168,8 @@ def cosine_similarity(vec1, vec2):
         return 0
     return np.dot(vec1, vec2) / (norm1 * norm2)
 
-def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, top_k=3):
+def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, top_k=3,
+                             max_prompt_tokens=128000, include_entire_codebase=False):
     query_embedding = embed_chunk(query_text)
     if query_embedding is None:
         messagebox.showerror("Error", "Failed to embed the query.")
@@ -178,17 +179,49 @@ def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, t
         sim = cosine_similarity(query_embedding, item["embedding"])
         results.append((sim, item))
     results.sort(key=lambda x: x[0], reverse=True)
-    selected = results[:top_k]
-    context_texts = []
-    for sim, item in selected:
-        context_texts.append(f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}")
-        print(f"[DEBUG] Selected chunk (sim={sim:.4f}) from {item['file']} chunk {item['chunk_index']}")
-    enhanced_prompt = (
-        f"User Query:\n{query_text}\n\n"
-        f"Relevant Code Context:\n" + "\n\n".join(context_texts) +
-        f"\n\nCustom Instructions:\n{custom_instructions}"
-    )
+
+    header = f"User Query:\n{query_text}\n\nRelevant Code Context:\n"
+    footer = f"\n\nCustom Instructions:\n{custom_instructions}"
+    
+    # If the user has chosen to include the entire codebase,
+    # first check whether the full prompt would fit the token limit.
+    if include_entire_codebase:
+        full_context = ""
+        for sim, item in results:
+            full_context += f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}\n\n"
+        full_prompt = header + full_context + footer
+        if len(full_prompt) // 4 > max_prompt_tokens:
+            messagebox.showwarning("Token Limit Exceeded",
+                                   "Including the entire codebase exceeds the max prompt token limit. "
+                                   "Falling back to top relevant chunks.")
+            selected_items = [item for _, item in results[:top_k]]
+        else:
+            selected_items = [item for _, item in results]
+    else:
+        selected_items = [item for _, item in results[:top_k]]
+    
+    # Build the prompt gradually while staying under the token limit.
+    base_token_count = len(header + footer) // 4  # approximate token count
+    available_tokens = max_prompt_tokens - base_token_count
+    context_text = ""
+    
+    for item in selected_items:
+        chunk_text = f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}\n\n"
+        chunk_tokens = len(chunk_text) // 4
+        if available_tokens - chunk_tokens >= 0:
+            context_text += chunk_text
+            available_tokens -= chunk_tokens
+        else:
+            # Add a truncated version of the chunk to fill the remaining space.
+            max_chars = available_tokens * 4
+            truncated_chunk = chunk_text[:max_chars]
+            context_text += truncated_chunk
+            available_tokens = 0
+            break
+
+    enhanced_prompt = header + context_text + footer
     return enhanced_prompt
+
 
 def compute_repo_hash(repo_path, extensions):
     """Compute a hash based on file paths, modification times, and sizes."""
@@ -296,7 +329,17 @@ def generate_prompt_button():
         messagebox.showerror("Error", "No embeddings data available. Please process a repository first.")
         return
     custom_instructions = custom_instructions_text.get("1.0", tk.END).strip()
-    enhanced = generate_enhanced_prompt(query, global_embeddings_data, custom_instructions, top_k=3)
+    
+    try:
+        max_prompt_tokens = int(max_prompt_tokens_var.get())
+    except Exception as e:
+        messagebox.showerror("Input Error", f"Invalid max prompt token value: {e}")
+        return
+    include_entire = entire_codebase_var.get()
+
+    enhanced = generate_enhanced_prompt(query, global_embeddings_data, custom_instructions,
+                                        top_k=3, max_prompt_tokens=max_prompt_tokens,
+                                        include_entire_codebase=include_entire)
     if enhanced:
         enhanced_prompt_text.delete("1.0", tk.END)
         enhanced_prompt_text.insert(tk.END, enhanced)
@@ -306,6 +349,7 @@ def generate_prompt_button():
         except Exception as e:
             print(f"[DEBUG] Error saving enhanced prompt: {e}")
         messagebox.showinfo("Success", "Enhanced prompt generated!")
+
 
 def copy_enhanced_prompt():
     content = enhanced_prompt_text.get("1.0", tk.END)
