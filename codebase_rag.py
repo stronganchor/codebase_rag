@@ -23,6 +23,9 @@ FILE_EXTENSIONS = [".py", ".js", ".java", ".cpp", ".c", ".ts", ".go", ".rb", ".p
 # Chunking parameter (fixed-size in characters)
 CHUNK_SIZE = 512
 
+# Folders to ignore when processing the repository
+SKIP_DIRS = ["getid3", "iso-languages", "plugin-update-checker", "languages", "media", "includes"]
+
 # Global variable to store embeddings (list of dicts)
 global_embeddings_data = []
 
@@ -57,12 +60,15 @@ def add_repo_to_recent(repo_url):
 def clone_or_update_repo(repo_url):
     repo_name = repo_url.rstrip("/").split("/")[-1]
     local_path = os.path.join(CLONE_BASE_DIR, repo_name)
+    print(f"[DEBUG] Local repo path: {local_path}")
     if os.path.exists(local_path):
+        print(f"[DEBUG] Repository exists. Pulling latest changes for {repo_name}...")
         try:
             subprocess.check_call(["git", "-C", local_path, "pull"])
         except Exception as e:
             messagebox.showerror("Git Error", f"Failed to update repo: {e}")
     else:
+        print(f"[DEBUG] Cloning repository {repo_url} into {local_path}...")
         try:
             subprocess.check_call(["git", "clone", repo_url, local_path])
         except Exception as e:
@@ -71,39 +77,59 @@ def clone_or_update_repo(repo_url):
     return local_path
 
 def list_code_files(repo_path, extensions):
+    """Recursively traverse repo_path and return files matching the extensions,
+       ignoring directories listed in SKIP_DIRS."""
     files = []
-    for ext in extensions:
-        files.extend(glob.glob(os.path.join(repo_path, f"**/*{ext}"), recursive=True))
+    for root, dirs, filenames in os.walk(repo_path):
+        # Filter out directories to skip (case-insensitive)
+        dirs[:] = [d for d in dirs if d.lower() not in [skip.lower() for skip in SKIP_DIRS]]
+        for f in filenames:
+            for ext in extensions:
+                if f.endswith(ext):
+                    full_path = os.path.join(root, f)
+                    files.append(full_path)
+                    print(f"[DEBUG] Found file: {full_path}")
+                    break
+    print(f"[DEBUG] Total code files found: {len(files)}")
     return files
 
 def read_file(filepath):
     try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+        content =  open(filepath, "r", encoding="utf-8", errors="ignore").read()
+        print(f"[DEBUG] Read {len(content)} characters from {filepath}")
+        return content
     except Exception as e:
         print(f"[DEBUG] Error reading {filepath}: {e}")
         return ""
 
 def chunk_text(text, max_length=CHUNK_SIZE):
-    return [text[i:i+max_length] for i in range(0, len(text), max_length)]
+    chunks = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+    print(f"[DEBUG] Chunked text into {len(chunks)} chunks (max_length={max_length}).")
+    return chunks
 
 def embed_chunk(chunk, model=EMBED_MODEL):
     payload = {"model": model, "input": chunk}
     try:
         response = requests.post(EMBED_API_URL, json=payload, timeout=30)
         response.raise_for_status()
-        return response.json().get("embedding", None)
+        embedding = response.json().get("embedding", None)
+        if embedding is None:
+            print("[DEBUG] No embedding returned for a chunk.")
+        return embedding
     except Exception as e:
         print(f"[DEBUG] Embedding API error: {e}")
         return None
 
 def process_repo(repo_local_path):
+    """Process the repository: traverse files, read content, chunk, and embed."""
     code_files = list_code_files(repo_local_path, FILE_EXTENSIONS)
-    print(f"[DEBUG] Found {len(code_files)} code files.")
+    print(f"[DEBUG] Processing {len(code_files)} code files.")
     results = []
     for file in code_files:
+        print(f"[DEBUG] Processing file: {file}")
         content = read_file(file)
         if not content:
+            print(f"[DEBUG] File {file} is empty or could not be read.")
             continue
         chunks = chunk_text(content)
         for idx, chunk in enumerate(chunks):
@@ -115,6 +141,10 @@ def process_repo(repo_local_path):
                     "chunk": chunk,
                     "embedding": embedding
                 })
+                print(f"[DEBUG] Embedded chunk {idx} of {file} (Embedding length: {len(embedding)}).")
+            else:
+                print(f"[DEBUG] Failed to embed chunk {idx} of {file}.")
+    print(f"[DEBUG] Total chunks embedded: {len(results)}")
     return results
 
 def cosine_similarity(vec1, vec2):
@@ -164,7 +194,7 @@ def start_embedding():
     global global_embeddings_data
     global_embeddings_data = process_repo(local_repo)
     output_text.insert(tk.END, f"\nProcessed {len(global_embeddings_data)} chunks.\n")
-
+    
     # Save the embeddings to a JSON file
     output_file = os.path.join(os.getcwd(), "embedding_output.json")
     try:
@@ -191,7 +221,6 @@ def generate_prompt_button():
     if enhanced:
         enhanced_prompt_text.delete("1.0", tk.END)
         enhanced_prompt_text.insert(tk.END, enhanced)
-        # Optionally save the enhanced prompt to a file
         try:
             with open("enhanced_prompt.txt", "w", encoding="utf-8") as f:
                 f.write(enhanced)
@@ -226,7 +255,7 @@ output_text = tk.Text(frame_output, wrap=tk.WORD, height=15)
 output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
 # Frame for query prompt input
-frame_query = tk.LabelFrame(root, text="Enter Query Prompt (e.g. Request for code changes or question about the code)")
+frame_query = tk.LabelFrame(root, text="Enter Query Prompt (e.g., Request for code changes or question about the code)")
 frame_query.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 query_prompt_text = tk.Text(frame_query, wrap=tk.WORD, height=5)
 query_prompt_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
