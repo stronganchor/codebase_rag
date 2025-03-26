@@ -21,9 +21,6 @@ EMBED_MODEL = "mxbai-embed-large"
 # Code file extensions to process
 FILE_EXTENSIONS = [".py", ".js", ".java", ".cpp", ".c", ".ts", ".go", ".rb", ".php"]
 
-# Chunking parameter (fixed-size in characters)
-CHUNK_SIZE = 512
-
 # Folders to ignore when processing the repository
 SKIP_DIRS = ["getid3", "iso-languages", "plugin-update-checker", "languages", "media", "includes"]
 
@@ -104,10 +101,16 @@ def read_file(filepath):
         print(f"[DEBUG] Error reading {filepath}: {e}")
         return ""
 
-def chunk_text(text, max_length=CHUNK_SIZE):
-    chunks = [text[i:i+max_length] for i in range(0, len(text), max_length)]
-    print(f"[DEBUG] Chunked text into {len(chunks)} chunks (max_length={max_length}).")
-    return chunks
+def chunk_file_text(text, max_chars):
+    """Return the whole text as one chunk if it's under max_chars,
+       otherwise split into chunks of size max_chars."""
+    if len(text) <= max_chars:
+        print(f"[DEBUG] File length {len(text)} <= max_chars {max_chars}, using whole file as one chunk.")
+        return [text]
+    else:
+        chunks = [text[i:i+max_chars] for i in range(0, len(text), max_chars)]
+        print(f"[DEBUG] File length {len(text)} > max_chars {max_chars}, chunked into {len(chunks)} chunks.")
+        return chunks
 
 def embed_chunk(chunk, model=EMBED_MODEL):
     payload = {"model": model, "input": chunk}
@@ -119,7 +122,6 @@ def embed_chunk(chunk, model=EMBED_MODEL):
             print(f"[DEBUG] Non-200 response: {response_text}")
             return None
         data = response.json()
-        # Expect the key "embeddings" and take the first vector
         embeddings = data.get("embeddings", None)
         if embeddings is None or not embeddings:
             print(f"[DEBUG] No embeddings returned for chunk. Response: {response_text}")
@@ -129,8 +131,9 @@ def embed_chunk(chunk, model=EMBED_MODEL):
         print(f"[DEBUG] Exception during embedding API call: {e}")
         return None
 
-def process_repo_with_progress(repo_local_path, progress_callback):
-    """Process the repository and update progress after each file."""
+def process_repo_with_progress(repo_local_path, progress_callback, max_chars):
+    """Process the repository: traverse files, read content, chunk, and embed.
+       Update progress after each file."""
     code_files = list_code_files(repo_local_path, FILE_EXTENSIONS)
     total_files = len(code_files)
     results = []
@@ -141,8 +144,9 @@ def process_repo_with_progress(repo_local_path, progress_callback):
             print(f"[DEBUG] File {file} is empty or unreadable.")
             progress_callback(file_idx+1, total_files)
             continue
-        chunks = chunk_text(content)
-        print(f"[DEBUG] File {file} produced {len(chunks)} chunks.")
+        # Use whole file as a single chunk unless it exceeds max_chars
+        chunks = chunk_file_text(content, max_chars)
+        print(f"[DEBUG] File {file} produced {len(chunks)} chunk(s).")
         for idx, chunk in enumerate(chunks):
             preview = chunk.replace('\n', ' ')[:100]
             print(f"[DEBUG] {os.path.basename(file)}: Embedding chunk {idx} (length: {len(chunk)} chars, preview: '{preview}')")
@@ -193,7 +197,6 @@ def update_progress(file_done, total_files):
     progress = int((file_done / total_files) * 100)
     progress_var.set(progress)
     status_label.config(text=f"Processed {file_done} of {total_files} files...")
-    # Ensure the GUI updates in the main thread
     root.update_idletasks()
 
 def start_embedding_thread():
@@ -213,10 +216,18 @@ def start_embedding_thread():
     output_text.insert(tk.END, f"Processing repository at {local_repo}...\n")
     output_text.update()
 
-    # Run processing in a separate thread
+    # Get max tokens from the GUI field and compute max_chars (approx. 4 chars per token)
+    try:
+        max_tokens = int(max_tokens_var.get())
+    except Exception as e:
+        messagebox.showerror("Input Error", f"Invalid max token value: {e}")
+        return
+    max_chars = max_tokens * 4
+    print(f"[DEBUG] Using max_tokens={max_tokens} => max_chars={max_chars}")
+
     def run_processing():
         global global_embeddings_data
-        global_embeddings_data = process_repo_with_progress(local_repo, progress_callback=update_progress)
+        global_embeddings_data = process_repo_with_progress(local_repo, progress_callback=update_progress, max_chars=max_chars)
         output_text.insert(tk.END, f"\nProcessed {len(global_embeddings_data)} chunks.\n")
         output_file = os.path.join(os.getcwd(), "embedding_output.json")
         try:
@@ -225,7 +236,6 @@ def start_embedding_thread():
             output_text.insert(tk.END, f"\nEmbeddings saved to: {output_file}\n")
         except Exception as e:
             output_text.insert(tk.END, f"\nError saving output: {e}\n")
-        # Reset progress bar and status label
         progress_var.set(100)
         status_label.config(text="Processing complete.")
 
@@ -272,7 +282,15 @@ repo_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
 browse_btn = tk.Button(frame_repo, text="Browse Folder", command=browse_repo)
 browse_btn.pack(side=tk.LEFT, padx=5, pady=5)
 
-# Progress bar and status label for embedding progress
+# Frame for chunking settings (max chunk size in tokens)
+frame_chunk = tk.LabelFrame(root, text="Chunking Settings")
+frame_chunk.pack(fill=tk.X, padx=10, pady=5)
+tk.Label(frame_chunk, text="Max Chunk Size (tokens):").pack(side=tk.LEFT, padx=5)
+max_tokens_var = tk.IntVar(value=128000)
+max_tokens_entry = tk.Entry(frame_chunk, textvariable=max_tokens_var, width=10)
+max_tokens_entry.pack(side=tk.LEFT, padx=5)
+
+# Progress bar and status label
 progress_var = tk.IntVar(value=0)
 progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate", variable=progress_var)
 progress_bar.pack(pady=5)
