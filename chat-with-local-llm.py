@@ -8,6 +8,16 @@ import re  # For processing <think> tags
 waiting = False
 start_time = None
 
+# Maximum context window limit (number of tokens)
+MAX_CTX = 8192
+
+def estimate_tokens(text):
+    """
+    Estimate token count based on a rough approximation of 1 token per 4 characters.
+    This is a simple heuristic and may not be exact.
+    """
+    return max(1, int(len(text) / 4))
+
 def update_waiting_label():
     """
     Updates the waiting label with the elapsed time.
@@ -37,11 +47,11 @@ def send_request(user_text):
         response = requests.post(
             "http://localhost:11434/api/chat",
             json={
-                "model": "qwq",  # Ensure this matches your Ollama model name
+                "model": model_var.get(),  # Use the selected model from the dropdown
                 "messages": [{"role": "user", "content": user_text}],
                 "stream": False,
                 "options": {
-                    "num_ctx": 32768  # Set the context window token limit
+                    "num_ctx": MAX_CTX  # Set the context window token limit
                 }
             }
             # No timeout parameter to allow indefinite waiting
@@ -99,13 +109,21 @@ def update_conversation(bot_reply, reasoning_note):
 def send_message():
     """
     Called when the user clicks 'Send'. It retrieves the input,
-    updates the conversation log, starts the waiting timer,
-    and launches a thread to perform the network request.
+    checks if it exceeds the context token limit, updates the conversation log,
+    starts the waiting timer, and launches a thread to perform the network request.
     """
     global waiting, start_time
     user_text = input_box.get("1.0", tk.END).strip()
     if not user_text:
         return  # Do nothing if the input is empty
+
+    # Check if the estimated token count exceeds the maximum context window
+    if estimate_tokens(user_text) > MAX_CTX:
+        conversation_log.config(state=tk.NORMAL)
+        conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({MAX_CTX} tokens). Please shorten your input.\n\n")
+        conversation_log.config(state=tk.DISABLED)
+        conversation_log.yview(tk.END)
+        return
 
     # Clear the input box for the next message
     input_box.delete("1.0", tk.END)
@@ -128,17 +146,32 @@ def send_message():
 
 def create_gui():
     """
-    Sets up the Tkinter GUI with a conversation log, input box, waiting label, and send button.
+    Sets up the Tkinter GUI with a conversation log, input box, waiting label, send button,
+    and a dropdown to select the AI model.
     """
-    global root, conversation_log, input_box, waiting_label
+    global root, conversation_log, input_box, waiting_label, model_var
     root = tk.Tk()
     root.title("QwQ Chat")
 
-    # Frame for the conversation log
+    # --- Top frame for model selection ---
+    top_frame = tk.Frame(root)
+    top_frame.pack(padx=10, pady=5, fill=tk.X)
+
+    model_label = tk.Label(top_frame, text="Select AI Model:")
+    model_label.pack(side=tk.LEFT)
+
+    # Define available models; default is deepseek-r1:7b and second option is qwq
+    model_options = ["deepseek-r1:7b", "qwq"]
+    model_var = tk.StringVar(root)
+    model_var.set(model_options[0])  # R1 (deepseek) as default
+
+    model_dropdown = tk.OptionMenu(top_frame, model_var, *model_options)
+    model_dropdown.pack(side=tk.LEFT, padx=5)
+
+    # --- Frame for conversation log ---
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
-    # Text widget for conversation log (read-only)
     conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.NORMAL)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -148,20 +181,16 @@ def create_gui():
     conversation_log.tag_configure("think", foreground="gray", font=("Helvetica", 10, "italic"))
     conversation_log.config(state=tk.DISABLED)
 
-    # Add a vertical scrollbar for the conversation log
     scrollbar = tk.Scrollbar(frame_log, command=conversation_log.yview)
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     conversation_log.config(yscrollcommand=scrollbar.set)
 
-    # Waiting label for displaying elapsed time
     waiting_label = tk.Label(root, text="", font=("Helvetica", 10))
     waiting_label.pack(pady=5)
 
-    # Input box for user text
     input_box = tk.Text(root, height=3, wrap=tk.WORD)
     input_box.pack(padx=10, pady=5, fill=tk.X)
 
-    # Send button
     send_button = tk.Button(root, text="Send", command=send_message)
     send_button.pack(pady=5)
 
