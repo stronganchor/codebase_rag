@@ -176,16 +176,24 @@ def send_message():
     """
     global waiting, start_time
     user_text = input_box.get("1.0", tk.END).strip()
+    
+    # Check if the text includes 'Enter' to avoid sending empty messages
+    if "Enter" in user_text:
+        return
+    
     if not user_text:
         return
 
-    if estimate_tokens(user_text) > get_context_limit(model_var.get()):
+    token_count = estimate_tokens(user_text)
+    context_limit = get_context_limit(model_var.get())
+    
+    if token_count > context_limit:
         conversation_log.config(state=tk.NORMAL)
-        conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({get_context_limit(model_var.get())} tokens). Please shorten your input.\n\n")
+        conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({context_limit} tokens). Please shorten your input.\n\n")
         conversation_log.config(state=tk.DISABLED)
         conversation_log.yview(tk.END)
         return
-
+    
     input_box.delete("1.0", tk.END)
     conversation_log.config(state=tk.NORMAL)
     conversation_log.insert(tk.END, "You: ", "user_label")
