@@ -9,8 +9,17 @@ import re  # For processing <think> tags
 waiting = False
 start_time = None
 
-# Maximum context window limit (number of tokens)
-MAX_CTX = 8192
+# Default maximum context window limit (number of tokens)
+DEFAULT_CTX = 8192
+
+def get_context_limit(model):
+    """
+    Returns the maximum context tokens for the given model.
+    For deepseek-r1, we override with 32768; otherwise, default to 8192.
+    """
+    if model == "deepseek-r1":
+        return 32768
+    return DEFAULT_CTX
 
 def estimate_tokens(text):
     """
@@ -41,18 +50,19 @@ def update_waiting_label():
 def send_request(user_text):
     global waiting
     selected_model = model_var.get()
+    context_limit = get_context_limit(selected_model)
 
     if selected_model == "deepseek-r1":
         # For deepseek-r1, use the /generate endpoint on port 11437.
-        # Note: deepseek-r1 (as installed via Ollama) expects a "prompt" field.
+        # Note: deepseek-r1 expects a "prompt" field.
         port = 11437
         endpoint = "generate"
         url = f"http://localhost:{port}/api/{endpoint}"
         payload = {
-            "model": selected_model,  # use "deepseek-r1" (without :7b)
+            "model": selected_model,  # use "deepseek-r1" (no need for :7b)
             "prompt": user_text,        # use "prompt" instead of "messages"
             "stream": True,             # enable streaming responses
-            "options": {"num_ctx": MAX_CTX}
+            "options": {"num_ctx": context_limit}
         }
         bot_reply = ""
         try:
@@ -67,13 +77,13 @@ def send_request(user_text):
                         # For the generate endpoint, accumulate text from the "response" field.
                         chunk_text = data.get("response", "")
                         bot_reply += chunk_text
-                        # Some responses include a "done" flag when complete.
+                        # Check for "done" flag to break the stream loop.
                         if data.get("done", False):
                             break
         except requests.exceptions.RequestException as e:
             bot_reply = f"Error: {str(e)}"
     else:
-        # Existing code for the qwq model remains unchanged
+        # Existing code for the qwq model remains unchanged.
         port = 11434
         endpoint = "chat"
         url = f"http://localhost:{port}/api/{endpoint}"
@@ -84,7 +94,7 @@ def send_request(user_text):
                     "model": selected_model,
                     "messages": [{"role": "user", "content": user_text}],
                     "stream": False,
-                    "options": {"num_ctx": MAX_CTX}
+                    "options": {"num_ctx": context_limit}
                 }
             )
             response.raise_for_status()
@@ -93,7 +103,7 @@ def send_request(user_text):
         except requests.exceptions.RequestException as e:
             bot_reply = f"Error: {str(e)}"
 
-    # Calculate reasoning time and update GUI
+    # Calculate reasoning time and update GUI.
     reasoning_time = time.time() - start_time
     if reasoning_time < 60:
         reasoning_note = f"Reasoned for {int(reasoning_time)}s."
@@ -144,9 +154,9 @@ def send_message():
     if not user_text:
         return
 
-    if estimate_tokens(user_text) > MAX_CTX:
+    if estimate_tokens(user_text) > get_context_limit(model_var.get()):
         conversation_log.config(state=tk.NORMAL)
-        conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({MAX_CTX} tokens). Please shorten your input.\n\n")
+        conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({get_context_limit(model_var.get())} tokens). Please shorten your input.\n\n")
         conversation_log.config(state=tk.DISABLED)
         conversation_log.yview(tk.END)
         return
@@ -180,6 +190,7 @@ def create_gui():
     model_label = tk.Label(top_frame, text="Select AI Model:")
     model_label.pack(side=tk.LEFT)
 
+    # Available models: default deepseek-r1 (with its own context limit) and qwq.
     model_options = ["deepseek-r1", "qwq"]
     model_var = tk.StringVar(root)
     model_var.set(model_options[0])
