@@ -51,20 +51,19 @@ def send_request(user_text):
     global waiting
     selected_model = model_var.get()
     context_limit = get_context_limit(selected_model)
-
+    bot_reply = ""
+    
+    # Branch for deepseek-r1 on port 11437 (using /generate and prompt field)
     if selected_model == "deepseek-r1":
-        # For deepseek-r1, use the /generate endpoint on port 11437.
-        # Note: deepseek-r1 expects a "prompt" field.
         port = 11437
         endpoint = "generate"
         url = f"http://localhost:{port}/api/{endpoint}"
         payload = {
-            "model": selected_model,  # use "deepseek-r1" (no need for :7b)
-            "prompt": user_text,        # use "prompt" instead of "messages"
-            "stream": True,             # enable streaming responses
+            "model": selected_model,  # use "deepseek-r1"
+            "prompt": user_text,       # prompt-based API
+            "stream": True,            # enable streaming responses
             "options": {"num_ctx": context_limit}
         }
-        bot_reply = ""
         try:
             with requests.post(url, json=payload, stream=True) as response:
                 response.raise_for_status()
@@ -74,16 +73,42 @@ def send_request(user_text):
                             data = json.loads(chunk)
                         except json.JSONDecodeError:
                             continue
-                        # For the generate endpoint, accumulate text from the "response" field.
                         chunk_text = data.get("response", "")
                         bot_reply += chunk_text
-                        # Check for "done" flag to break the stream loop.
                         if data.get("done", False):
                             break
         except requests.exceptions.RequestException as e:
             bot_reply = f"Error: {str(e)}"
+    
+    # New branch for codellama (7b) on port 11436 (using /generate and prompt field)
+    elif selected_model == "codellama":
+        port = 11436
+        endpoint = "generate"
+        url = f"http://localhost:{port}/api/{endpoint}"
+        payload = {
+            "model": selected_model,  # use "codellama"
+            "prompt": user_text,       # using prompt field
+            "stream": True,            # enable streaming responses
+            "options": {"num_ctx": context_limit}
+        }
+        try:
+            with requests.post(url, json=payload, stream=True) as response:
+                response.raise_for_status()
+                for chunk in response.iter_lines(decode_unicode=True):
+                    if chunk:
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            continue
+                        chunk_text = data.get("response", "")
+                        bot_reply += chunk_text
+                        if data.get("done", False):
+                            break
+        except requests.exceptions.RequestException as e:
+            bot_reply = f"Error: {str(e)}"
+    
+    # Existing branch for other models (e.g. "qwq") using /api/chat and messages field
     else:
-        # Existing code for the qwq model remains unchanged.
         port = 11434
         endpoint = "chat"
         url = f"http://localhost:{port}/api/{endpoint}"
@@ -103,7 +128,7 @@ def send_request(user_text):
         except requests.exceptions.RequestException as e:
             bot_reply = f"Error: {str(e)}"
 
-    # Calculate reasoning time and update GUI.
+    # Calculate reasoning time and update GUI
     reasoning_time = time.time() - start_time
     if reasoning_time < 60:
         reasoning_note = f"Reasoned for {int(reasoning_time)}s."
@@ -190,8 +215,8 @@ def create_gui():
     model_label = tk.Label(top_frame, text="Select AI Model:")
     model_label.pack(side=tk.LEFT)
 
-    # Available models: default deepseek-r1 (with its own context limit) and qwq.
-    model_options = ["deepseek-r1", "qwq"]
+    # Available models: deepseek-r1 (with higher context), qwq, and codellama.
+    model_options = ["deepseek-r1", "qwq", "codellama"]
     model_var = tk.StringVar(root)
     model_var.set(model_options[0])
 
