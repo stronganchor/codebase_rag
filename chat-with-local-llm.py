@@ -208,12 +208,28 @@ def send_message():
     thread = threading.Thread(target=send_request, args=(user_text,))
     thread.start()
 
+def update_token_limit_label(*args):
+    """
+    Updates the token limit label based on the selected model.
+    """
+    selected_model = model_var.get()
+    context_limit = get_context_limit(selected_model)
+    token_limit_label.config(text=f"Token Limit: {context_limit}")
+    
+def update_prompt_token_count(event=None):
+    """
+    Estimates the token count in the prompt field and updates its label.
+    """
+    text = input_box.get("1.0", tk.END)
+    token_count = estimate_tokens(text)
+    prompt_token_label.config(text=f"Prompt Tokens: {token_count}")
+
 def create_gui():
     """
     Sets up the Tkinter GUI with a conversation log, input box, waiting label, send button,
-    and a dropdown to select the AI model.
+    a dropdown to select the AI model, token limit label, and prompt token count label.
     """
-    global root, conversation_log, input_box, waiting_label, model_var
+    global root, conversation_log, input_box, waiting_label, model_var, token_limit_label, prompt_token_label
     root = tk.Tk()
     root.title("QwQ Chat")
 
@@ -227,9 +243,15 @@ def create_gui():
     model_options = ["deepseek-r1", "qwq", "codellama"]
     model_var = tk.StringVar(root)
     model_var.set(model_options[0])
+    model_var.trace("w", update_token_limit_label)  # update token limit when model changes
 
     model_dropdown = tk.OptionMenu(top_frame, model_var, *model_options)
     model_dropdown.pack(side=tk.LEFT, padx=5)
+    
+    # Token limit label (based on selected model)
+    token_limit_label = tk.Label(top_frame, text="")
+    token_limit_label.pack(side=tk.LEFT, padx=5)
+    update_token_limit_label()  # initialize token limit label
 
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
@@ -249,8 +271,14 @@ def create_gui():
     waiting_label = tk.Label(root, text="", font=("Helvetica", 10))
     waiting_label.pack(pady=5)
 
+    # Input box for user text
     input_box = tk.Text(root, height=3, wrap=tk.WORD)
     input_box.pack(padx=10, pady=5, fill=tk.X)
+    input_box.bind("<KeyRelease>", update_prompt_token_count)  # update prompt token count on changes
+
+    # Prompt token count label
+    prompt_token_label = tk.Label(root, text="Prompt Tokens: 0")
+    prompt_token_label.pack(pady=2)
 
     send_button = tk.Button(root, text="Send", command=send_message)
     send_button.pack(pady=5)
