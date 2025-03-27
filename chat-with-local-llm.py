@@ -53,15 +53,15 @@ def send_request(user_text):
     context_limit = get_context_limit(selected_model)
     bot_reply = ""
     
-    # Branch for deepseek-r1 on port 11437 (using /generate and prompt field)
+    # deepseek-r1: use /api/generate on port 11437 with a prompt field.
     if selected_model == "deepseek-r1":
         port = 11437
         endpoint = "generate"
         url = f"http://localhost:{port}/api/{endpoint}"
         payload = {
-            "model": selected_model,  # use "deepseek-r1"
-            "prompt": user_text,       # prompt-based API
-            "stream": True,            # enable streaming responses
+            "model": selected_model,  # e.g., "deepseek-r1"
+            "prompt": user_text,
+            "stream": True,
             "options": {"num_ctx": context_limit}
         }
         try:
@@ -80,15 +80,15 @@ def send_request(user_text):
         except requests.exceptions.RequestException as e:
             bot_reply = f"Error: {str(e)}"
     
-    # New branch for codellama (7b) on port 11436 (using /generate and prompt field)
+    # codellama: use /api/generate on port 11436 with a prompt field.
     elif selected_model == "codellama":
         port = 11436
         endpoint = "generate"
         url = f"http://localhost:{port}/api/{endpoint}"
         payload = {
-            "model": selected_model,  # use "codellama"
-            "prompt": user_text,       # using prompt field
-            "stream": True,            # enable streaming responses
+            "model": "codellama:7b",  # Append :7b to the model name
+            "prompt": user_text,      # Use prompt, not messages
+            "stream": True,
             "options": {"num_ctx": context_limit}
         }
         try:
@@ -107,7 +107,7 @@ def send_request(user_text):
         except requests.exceptions.RequestException as e:
             bot_reply = f"Error: {str(e)}"
     
-    # Existing branch for other models (e.g. "qwq") using /api/chat and messages field
+    # Other models (like "qwq"): use /api/chat on port 11434 with a messages payload.
     else:
         port = 11434
         endpoint = "chat"
@@ -128,7 +128,7 @@ def send_request(user_text):
         except requests.exceptions.RequestException as e:
             bot_reply = f"Error: {str(e)}"
 
-    # Calculate reasoning time and update GUI
+    # Calculate reasoning time and update GUI.
     reasoning_time = time.time() - start_time
     if reasoning_time < 60:
         reasoning_note = f"Reasoned for {int(reasoning_time)}s."
