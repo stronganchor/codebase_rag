@@ -15,9 +15,8 @@ DEFAULT_CTX = 8192
 def get_context_limit(model):
     """
     Returns the maximum context tokens for the given model.
-    For deepseek-r1, we override with 32768; otherwise, default to 8192.
     """
-    if model == "deepseek-r1":
+    if model in ("deepseek-r1"):
         return 32768
     return DEFAULT_CTX
 
@@ -60,6 +59,33 @@ def send_request(user_text):
         url = f"http://localhost:{port}/api/{endpoint}"
         payload = {
             "model": selected_model,  # e.g., "deepseek-r1"
+            "prompt": user_text,
+            "stream": True,
+            "options": {"num_ctx": context_limit}
+        }
+        try:
+            with requests.post(url, json=payload, stream=True) as response:
+                response.raise_for_status()
+                for chunk in response.iter_lines(decode_unicode=True):
+                    if chunk:
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            continue
+                        chunk_text = data.get("response", "")
+                        bot_reply += chunk_text
+                        if data.get("done", False):
+                            break
+        except requests.exceptions.RequestException as e:
+            bot_reply = f"Error: {str(e)}"
+    
+    # deepseek-r1:32b: similar to deepseek-r1 but with model name "deepseek-r1:32b".
+    elif selected_model == "deepseek-r1:32b":
+        port = 11440
+        endpoint = "generate"
+        url = f"http://localhost:{port}/api/{endpoint}"
+        payload = {
+            "model": selected_model,  # "deepseek-r1:32b"
             "prompt": user_text,
             "stream": True,
             "options": {"num_ctx": context_limit}
@@ -239,8 +265,8 @@ def create_gui():
     model_label = tk.Label(top_frame, text="Select AI Model:")
     model_label.pack(side=tk.LEFT)
 
-    # Available models: deepseek-r1 (with higher context), qwq, and codellama.
-    model_options = ["deepseek-r1", "qwq", "codellama"]
+    # Available models: deepseek-r1, deepseek-r1:32b (with higher context), qwq, and codellama.
+    model_options = ["deepseek-r1", "deepseek-r1:32b", "qwq", "codellama"]
     model_var = tk.StringVar(root)
     model_var.set(model_options[0])
     model_var.trace("w", update_token_limit_label)  # update token limit when model changes
