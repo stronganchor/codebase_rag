@@ -2,6 +2,7 @@ import tkinter as tk
 import requests
 import threading
 import time
+import json
 import re  # For processing <think> tags
 
 # Global variables to control the waiting timer
@@ -38,39 +39,61 @@ def update_waiting_label():
         waiting_label.config(text="")
 
 def send_request(user_text):
-    """
-    Runs in a separate thread to call the Ollama API and fetch the response.
-    When done, it schedules an update to the conversation log on the main thread.
-    """
     global waiting
-    # Choose the port based on the selected model
     selected_model = model_var.get()
-    if selected_model == "deepseek-r1:7b":
-        port = 11437
-    else:
-        port = 11434
 
-    url = f"http://localhost:{port}/api/chat"
-    try:
-        response = requests.post(
-            url,
-            json={
-                "model": selected_model,
-                "messages": [{"role": "user", "content": user_text}],
-                "stream": False,
-                "options": {
-                    "num_ctx": MAX_CTX  # Set the context window token limit
+    if selected_model == "deepseek-r1":
+        # For deepseek-r1, use the /generate endpoint on port 11437.
+        # Note: deepseek-r1 (as installed via Ollama) expects a "prompt" field.
+        port = 11437
+        endpoint = "generate"
+        url = f"http://localhost:{port}/api/{endpoint}"
+        payload = {
+            "model": selected_model,  # use "deepseek-r1" (without :7b)
+            "prompt": user_text,        # use "prompt" instead of "messages"
+            "stream": True,             # enable streaming responses
+            "options": {"num_ctx": MAX_CTX}
+        }
+        bot_reply = ""
+        try:
+            with requests.post(url, json=payload, stream=True) as response:
+                response.raise_for_status()
+                for chunk in response.iter_lines(decode_unicode=True):
+                    if chunk:
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            continue
+                        # For the generate endpoint, accumulate text from the "response" field.
+                        chunk_text = data.get("response", "")
+                        bot_reply += chunk_text
+                        # Some responses include a "done" flag when complete.
+                        if data.get("done", False):
+                            break
+        except requests.exceptions.RequestException as e:
+            bot_reply = f"Error: {str(e)}"
+    else:
+        # Existing code for the qwq model remains unchanged
+        port = 11434
+        endpoint = "chat"
+        url = f"http://localhost:{port}/api/{endpoint}"
+        try:
+            response = requests.post(
+                url,
+                json={
+                    "model": selected_model,
+                    "messages": [{"role": "user", "content": user_text}],
+                    "stream": False,
+                    "options": {"num_ctx": MAX_CTX}
                 }
-            }
-            # No timeout parameter to allow indefinite waiting
-        )
-        response.raise_for_status()
-        data = response.json()
-        bot_reply = data.get("message", {}).get("content", "<No response received>")
-    except requests.exceptions.RequestException as e:
-        bot_reply = f"Error: {str(e)}"
-    
-    # Calculate reasoning time
+            )
+            response.raise_for_status()
+            data = response.json()
+            bot_reply = data.get("message", {}).get("content", f"Invalid response received: {response} {data}")
+        except requests.exceptions.RequestException as e:
+            bot_reply = f"Error: {str(e)}"
+
+    # Calculate reasoning time and update GUI
     reasoning_time = time.time() - start_time
     if reasoning_time < 60:
         reasoning_note = f"Reasoned for {int(reasoning_time)}s."
@@ -79,7 +102,6 @@ def send_request(user_text):
         seconds = int(reasoning_time) % 60
         reasoning_note = f"Reasoned for {minutes}m {seconds}s."
     
-    # Update the GUI in the main thread
     root.after(0, update_conversation, bot_reply, reasoning_note)
 
 def insert_bot_message(message):
@@ -89,13 +111,10 @@ def insert_bot_message(message):
     """
     pos = 0
     for match in re.finditer(r"<think>(.*?)</think>", message):
-        # Insert text before the <think> block
         if match.start() > pos:
             conversation_log.insert(tk.END, message[pos:match.start()])
-        # Insert the <think> block in italic gray text
         conversation_log.insert(tk.END, match.group(1), "think")
         pos = match.end()
-    # Insert any remaining text after the last <think> block
     if pos < len(message):
         conversation_log.insert(tk.END, message[pos:])
 
@@ -123,9 +142,8 @@ def send_message():
     global waiting, start_time
     user_text = input_box.get("1.0", tk.END).strip()
     if not user_text:
-        return  # Do nothing if the input is empty
+        return
 
-    # Check if the estimated token count exceeds the maximum context window
     if estimate_tokens(user_text) > MAX_CTX:
         conversation_log.config(state=tk.NORMAL)
         conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({MAX_CTX} tokens). Please shorten your input.\n\n")
@@ -133,22 +151,17 @@ def send_message():
         conversation_log.yview(tk.END)
         return
 
-    # Clear the input box for the next message
     input_box.delete("1.0", tk.END)
-
-    # Display user's message in the conversation log with bold "You:" label
     conversation_log.config(state=tk.NORMAL)
     conversation_log.insert(tk.END, "You: ", "user_label")
     conversation_log.insert(tk.END, f"{user_text}\n")
     conversation_log.config(state=tk.DISABLED)
-    conversation_log.yview(tk.END)  # Auto-scroll to the latest message
+    conversation_log.yview(tk.END)
 
-    # Start waiting timer
     waiting = True
     start_time = time.time()
     update_waiting_label()
 
-    # Start the network call in a separate thread
     thread = threading.Thread(target=send_request, args=(user_text,))
     thread.start()
 
@@ -161,29 +174,25 @@ def create_gui():
     root = tk.Tk()
     root.title("QwQ Chat")
 
-    # --- Top frame for model selection ---
     top_frame = tk.Frame(root)
     top_frame.pack(padx=10, pady=5, fill=tk.X)
 
     model_label = tk.Label(top_frame, text="Select AI Model:")
     model_label.pack(side=tk.LEFT)
 
-    # Define available models; default is deepseek-r1:7b and second option is qwq
-    model_options = ["deepseek-r1:7b", "qwq"]
+    model_options = ["deepseek-r1", "qwq"]
     model_var = tk.StringVar(root)
-    model_var.set(model_options[0])  # Default model is deepseek-r1:7b
+    model_var.set(model_options[0])
 
     model_dropdown = tk.OptionMenu(top_frame, model_var, *model_options)
     model_dropdown.pack(side=tk.LEFT, padx=5)
 
-    # --- Frame for conversation log ---
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
     conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.NORMAL)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    # Configure text tags for formatting
     conversation_log.tag_configure("user_label", font=("Helvetica", 10, "bold"))
     conversation_log.tag_configure("bot_label", font=("Helvetica", 10, "bold"))
     conversation_log.tag_configure("think", foreground="gray", font=("Helvetica", 10, "italic"))
