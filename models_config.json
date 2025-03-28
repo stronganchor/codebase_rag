@@ -1,0 +1,34 @@
+{
+  "deepseek-r1": {
+    "context_limit": 32768,
+    "port": 11437,
+    "endpoint": "generate",
+    "payload_field": "prompt",
+    "payload_model": "deepseek-r1",
+    "stream": true
+  },
+  "deepseek-r1:32b": {
+    "context_limit": 32768,
+    "port": 11440,
+    "endpoint": "generate",
+    "payload_field": "prompt",
+    "payload_model": "deepseek-r1:32b",
+    "stream": true
+  },
+  "codellama": {
+    "context_limit": 8192,
+    "port": 11436,
+    "endpoint": "generate",
+    "payload_field": "prompt",
+    "payload_model": "codellama:7b",
+    "stream": true
+  },
+  "qwq": {
+    "context_limit": 8192,
+    "port": 11434,
+    "endpoint": "chat",
+    "payload_field": "messages",
+    "payload_model": "qwq",
+    "stream": false
+  }
+}
