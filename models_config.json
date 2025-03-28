@@ -8,20 +8,36 @@
     "stream": true
   },
   "deepseek-r1:32b": {
-    "context_limit": 32768,
+    "context_limit": 8192,
     "port": 11440,
     "endpoint": "generate",
     "payload_field": "prompt",
     "payload_model": "deepseek-r1:32b",
     "stream": true
   },
-  "codellama": {
-    "context_limit": 8192,
+  "gemma3:12b": {
+    "context_limit": 16384,
+    "port": 11439,
+    "endpoint": "chat",
+    "payload_field": "messages",
+    "payload_model": "gemma3:12b",
+    "stream": false
+  },
+  "codellama:7b": {
+    "context_limit": 32768,
     "port": 11436,
     "endpoint": "generate",
     "payload_field": "prompt",
     "payload_model": "codellama:7b",
     "stream": true
+  },
+  "qwen2.5-coder:32b": {
+    "context_limit": 4096,
+    "port": 11438,
+    "endpoint": "chat",
+    "payload_field": "messages",
+    "payload_model": "qwen2.5-coder:32b",
+    "stream": false
   },
   "qwq": {
     "context_limit": 8192,
