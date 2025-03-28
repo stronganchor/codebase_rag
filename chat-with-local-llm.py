@@ -48,11 +48,12 @@ def update_waiting_label():
     else:
         waiting_label.config(text="")
 
-def send_request(user_text):
+def send_request(user_text, dynamic_context):
     global waiting
     selected_model = model_var.get()
     config = MODELS_CONFIG[selected_model]
-    context_limit = config.get("context_limit", DEFAULT_CTX)
+    # Use the dynamically computed context limit for this request.
+    context_limit = dynamic_context
     bot_reply = ""
 
     port = config["port"]
@@ -150,8 +151,9 @@ def update_conversation(bot_reply, reasoning_note):
 def send_message():
     """
     Called when the user clicks 'Send' or presses Enter (without Shift). It retrieves the input,
-    checks if it exceeds the prompt token limit (reserving 4096 tokens for output), updates the conversation log,
-    starts the waiting timer, and launches a thread to perform the network request.
+    computes a dynamic context limit based on prompt length and an expected output of 4096 tokens,
+    checks if the prompt is too long, updates the conversation log, starts the waiting timer,
+    and launches a thread to perform the network request.
     """
     global waiting, start_time
     user_text = input_box.get("1.0", tk.END).strip()
@@ -160,19 +162,31 @@ def send_message():
         return
 
     token_count = estimate_tokens(user_text)
-    context_limit = MODELS_CONFIG[model_var.get()].get("context_limit", DEFAULT_CTX)
-    # Reserve 4096 tokens for output.
-    allowed_prompt_tokens = context_limit - 4096
+    config_context_limit = MODELS_CONFIG[model_var.get()].get("context_limit", DEFAULT_CTX)
+    expected_output = 4096
 
+    # The prompt must fit within (config_context_limit - expected_output)
+    allowed_prompt_tokens = config_context_limit - expected_output
     if token_count > allowed_prompt_tokens:
         conversation_log.config(state=tk.NORMAL)
         conversation_log.insert(
             tk.END,
-            f"Error: Prompt exceeds the allowed token limit. Maximum prompt tokens allowed is {allowed_prompt_tokens} (total context limit is {context_limit} tokens, reserving 4096 tokens for output), but your prompt is estimated at {token_count} tokens. Please shorten your input.\n\n"
+            f"Error: Prompt exceeds the maximum allowed prompt token limit ({allowed_prompt_tokens} tokens) leaving {expected_output} tokens for output.\n\n"
         )
         conversation_log.config(state=tk.DISABLED)
         conversation_log.yview(tk.END)
         return
+
+    # Compute dynamic context limit based on prompt size and expected output.
+    # If the prompt is short (<= 4096 tokens), use 8192 tokens.
+    # Otherwise, use twice the prompt token count.
+    if token_count <= expected_output:
+        dynamic_context = 2 * expected_output  # 8192
+    else:
+        dynamic_context = 2 * token_count
+
+    # Cap the dynamic context at the model's configured maximum.
+    dynamic_context = min(dynamic_context, config_context_limit)
 
     input_box.delete("1.0", tk.END)
     conversation_log.config(state=tk.NORMAL)
@@ -185,7 +199,7 @@ def send_message():
     start_time = time.time()
     update_waiting_label()
 
-    thread = threading.Thread(target=send_request, args=(user_text,))
+    thread = threading.Thread(target=send_request, args=(user_text, dynamic_context))
     thread.start()
 
 def update_token_limit_label(*args):
