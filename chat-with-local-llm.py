@@ -5,20 +5,15 @@ import time
 import json
 import re  # For processing <think> tags
 
-# Global variables to control the waiting timer
-waiting = False
-start_time = None
+# Load model configuration from file
+def load_model_config():
+    with open("models_config.json", "r") as f:
+        return json.load(f)
 
-# Default maximum context window limit (number of tokens)
+MODELS_CONFIG = load_model_config()
+
+# Default maximum context window limit (number of tokens) if not specified in config.
 DEFAULT_CTX = 8192
-
-def get_context_limit(model):
-    """
-    Returns the maximum context tokens for the given model.
-    """
-    if model in ("deepseek-r1"):
-        return 32768
-    return DEFAULT_CTX
 
 def estimate_tokens(text):
     """
@@ -26,6 +21,10 @@ def estimate_tokens(text):
     This is a simple heuristic and may not be exact.
     """
     return max(1, int(len(text) / 4))
+
+# Global variables to control the waiting timer
+waiting = False
+start_time = None
 
 def update_waiting_label():
     """
@@ -49,110 +48,56 @@ def update_waiting_label():
 def send_request(user_text):
     global waiting
     selected_model = model_var.get()
-    context_limit = get_context_limit(selected_model)
+    config = MODELS_CONFIG[selected_model]
+    context_limit = config.get("context_limit", DEFAULT_CTX)
     bot_reply = ""
-    
-    # deepseek-r1: use /api/generate on port 11437 with a prompt field.
-    if selected_model == "deepseek-r1":
-        port = 11437
-        endpoint = "generate"
-        url = f"http://localhost:{port}/api/{endpoint}"
-        payload = {
-            "model": selected_model,  # e.g., "deepseek-r1"
-            "prompt": user_text,
-            "stream": True,
-            "options": {"num_ctx": context_limit}
-        }
-        try:
-            with requests.post(url, json=payload, stream=True) as response:
-                response.raise_for_status()
-                for chunk in response.iter_lines(decode_unicode=True):
-                    if chunk:
-                        try:
-                            data = json.loads(chunk)
-                        except json.JSONDecodeError:
-                            continue
-                        chunk_text = data.get("response", "")
-                        bot_reply += chunk_text
-                        if data.get("done", False):
-                            break
-        except requests.exceptions.RequestException as e:
-            bot_reply = f"Error: {str(e)}"
-    
-    # deepseek-r1:32b: similar to deepseek-r1 but with model name "deepseek-r1:32b".
-    elif selected_model == "deepseek-r1:32b":
-        port = 11440
-        endpoint = "generate"
-        url = f"http://localhost:{port}/api/{endpoint}"
-        payload = {
-            "model": selected_model,  # "deepseek-r1:32b"
-            "prompt": user_text,
-            "stream": True,
-            "options": {"num_ctx": context_limit}
-        }
-        try:
-            with requests.post(url, json=payload, stream=True) as response:
-                response.raise_for_status()
-                for chunk in response.iter_lines(decode_unicode=True):
-                    if chunk:
-                        try:
-                            data = json.loads(chunk)
-                        except json.JSONDecodeError:
-                            continue
-                        chunk_text = data.get("response", "")
-                        bot_reply += chunk_text
-                        if data.get("done", False):
-                            break
-        except requests.exceptions.RequestException as e:
-            bot_reply = f"Error: {str(e)}"
-    
-    # codellama: use /api/generate on port 11436 with a prompt field.
-    elif selected_model == "codellama":
-        port = 11436
-        endpoint = "generate"
-        url = f"http://localhost:{port}/api/{endpoint}"
-        payload = {
-            "model": "codellama:7b",  # Append :7b to the model name
-            "prompt": user_text,      # Use prompt, not messages
-            "stream": True,
-            "options": {"num_ctx": context_limit}
-        }
-        try:
-            with requests.post(url, json=payload, stream=True) as response:
-                response.raise_for_status()
-                for chunk in response.iter_lines(decode_unicode=True):
-                    if chunk:
-                        try:
-                            data = json.loads(chunk)
-                        except json.JSONDecodeError:
-                            continue
-                        chunk_text = data.get("response", "")
-                        bot_reply += chunk_text
-                        if data.get("done", False):
-                            break
-        except requests.exceptions.RequestException as e:
-            bot_reply = f"Error: {str(e)}"
-    
-    # Other models (like "qwq"): use /api/chat on port 11434 with a messages payload.
+
+    port = config["port"]
+    endpoint = config["endpoint"]
+    url = f"http://localhost:{port}/api/{endpoint}"
+    payload_field = config["payload_field"]
+    payload_model = config.get("payload_model", selected_model)
+    stream = config["stream"]
+
+    # Determine payload content based on payload_field.
+    if payload_field == "prompt":
+        payload_content = user_text
+    elif payload_field == "messages":
+        payload_content = [{"role": "user", "content": user_text}]
     else:
-        port = 11434
-        endpoint = "chat"
-        url = f"http://localhost:{port}/api/{endpoint}"
-        try:
-            response = requests.post(
-                url,
-                json={
-                    "model": selected_model,
-                    "messages": [{"role": "user", "content": user_text}],
-                    "stream": False,
-                    "options": {"num_ctx": context_limit}
-                }
-            )
+        payload_content = user_text  # Fallback
+
+    payload = {
+        "model": payload_model,
+        payload_field: payload_content,
+        "stream": stream,
+        "options": {"num_ctx": context_limit}
+    }
+
+    try:
+        if stream:
+            with requests.post(url, json=payload, stream=True) as response:
+                response.raise_for_status()
+                for chunk in response.iter_lines(decode_unicode=True):
+                    if chunk:
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            continue
+                        chunk_text = data.get("response", "")
+                        bot_reply += chunk_text
+                        if data.get("done", False):
+                            break
+        else:
+            response = requests.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
-            bot_reply = data.get("message", {}).get("content", f"Invalid response received: {response} {data}")
-        except requests.exceptions.RequestException as e:
-            bot_reply = f"Error: {str(e)}"
+            if payload_field == "messages":
+                bot_reply = data.get("message", {}).get("content", f"Invalid response received: {response} {data}")
+            else:
+                bot_reply = data.get("response", "")
+    except requests.exceptions.RequestException as e:
+        bot_reply = f"Error: {str(e)}"
 
     # Calculate reasoning time and update GUI.
     reasoning_time = time.time() - start_time
@@ -162,7 +107,7 @@ def send_request(user_text):
         minutes = int(reasoning_time) // 60
         seconds = int(reasoning_time) % 60
         reasoning_note = f"Reasoned for {minutes}m {seconds}s."
-    
+
     root.after(0, update_conversation, bot_reply, reasoning_note)
 
 def insert_bot_message(message):
@@ -181,7 +126,8 @@ def insert_bot_message(message):
 
 def update_conversation(bot_reply, reasoning_note):
     """
-    Updates the conversation log with the bot's reply and reasoning time, then stops the timer.
+    Updates the conversation log with the bot's reply and reasoning time,
+    then stops the timer.
     """
     global waiting
     waiting = False  # Stop the timer
@@ -202,24 +148,23 @@ def send_message():
     """
     global waiting, start_time
     user_text = input_box.get("1.0", tk.END).strip()
-    
-    # Check if the text includes 'Enter' to avoid sending empty messages
+
     if "Enter" in user_text:
         return
-    
+
     if not user_text:
         return
 
     token_count = estimate_tokens(user_text)
-    context_limit = get_context_limit(model_var.get())
-    
+    context_limit = MODELS_CONFIG[model_var.get()].get("context_limit", DEFAULT_CTX)
+
     if token_count > context_limit:
         conversation_log.config(state=tk.NORMAL)
         conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({context_limit} tokens). Please shorten your input.\n\n")
         conversation_log.config(state=tk.DISABLED)
         conversation_log.yview(tk.END)
         return
-    
+
     input_box.delete("1.0", tk.END)
     conversation_log.config(state=tk.NORMAL)
     conversation_log.insert(tk.END, "You: ", "user_label")
@@ -239,9 +184,9 @@ def update_token_limit_label(*args):
     Updates the token limit label based on the selected model.
     """
     selected_model = model_var.get()
-    context_limit = get_context_limit(selected_model)
+    context_limit = MODELS_CONFIG.get(selected_model, {}).get("context_limit", DEFAULT_CTX)
     token_limit_label.config(text=f"Token Limit: {context_limit}")
-    
+
 def update_prompt_token_count(event=None):
     """
     Estimates the token count in the prompt field and updates its label.
@@ -256,6 +201,7 @@ def create_gui():
     a dropdown to select the AI model, token limit label, and prompt token count label.
     """
     global root, conversation_log, input_box, waiting_label, model_var, token_limit_label, prompt_token_label
+
     root = tk.Tk()
     root.title("QwQ Chat")
 
@@ -265,26 +211,25 @@ def create_gui():
     model_label = tk.Label(top_frame, text="Select AI Model:")
     model_label.pack(side=tk.LEFT)
 
-    # Available models: deepseek-r1, deepseek-r1:32b (with higher context), qwq, and codellama.
-    model_options = ["deepseek-r1", "deepseek-r1:32b", "qwq", "codellama"]
+    # Use model names from the configuration file.
+    model_options = list(MODELS_CONFIG.keys())
     model_var = tk.StringVar(root)
     model_var.set(model_options[0])
-    model_var.trace("w", update_token_limit_label)  # update token limit when model changes
+    model_var.trace("w", update_token_limit_label)
 
     model_dropdown = tk.OptionMenu(top_frame, model_var, *model_options)
     model_dropdown.pack(side=tk.LEFT, padx=5)
-    
+
     # Token limit label (based on selected model)
     token_limit_label = tk.Label(top_frame, text="")
     token_limit_label.pack(side=tk.LEFT, padx=5)
-    update_token_limit_label()  # initialize token limit label
+    update_token_limit_label()
 
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
     conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.NORMAL)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
     conversation_log.tag_configure("user_label", font=("Helvetica", 10, "bold"))
     conversation_log.tag_configure("bot_label", font=("Helvetica", 10, "bold"))
     conversation_log.tag_configure("think", foreground="gray", font=("Helvetica", 10, "italic"))
@@ -300,7 +245,7 @@ def create_gui():
     # Input box for user text
     input_box = tk.Text(root, height=3, wrap=tk.WORD)
     input_box.pack(padx=10, pady=5, fill=tk.X)
-    input_box.bind("<KeyRelease>", update_prompt_token_count)  # update prompt token count on changes
+    input_box.bind("<KeyRelease>", update_prompt_token_count)
 
     # Prompt token count label
     prompt_token_label = tk.Label(root, text="Prompt Tokens: 0")
