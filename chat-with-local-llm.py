@@ -4,10 +4,13 @@ import threading
 import time
 import json
 import re  # For processing <think> tags
+import os
 
-# Load model configuration from file
+# Load model configuration from file located in the same directory as this script
 def load_model_config():
-    with open("models_config.json", "r") as f:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "models_config.json")
+    with open(config_path, "r") as f:
         return json.load(f)
 
 MODELS_CONFIG = load_model_config()
