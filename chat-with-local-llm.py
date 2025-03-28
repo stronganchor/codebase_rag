@@ -145,15 +145,12 @@ def update_conversation(bot_reply, reasoning_note):
 
 def send_message():
     """
-    Called when the user clicks 'Send'. It retrieves the input,
+    Called when the user clicks 'Send' or presses Enter (without Shift). It retrieves the input,
     checks if it exceeds the context token limit, updates the conversation log,
     starts the waiting timer, and launches a thread to perform the network request.
     """
     global waiting, start_time
     user_text = input_box.get("1.0", tk.END).strip()
-
-    if "Enter" in user_text:
-        return
 
     if not user_text:
         return
@@ -197,6 +194,21 @@ def update_prompt_token_count(event=None):
     text = input_box.get("1.0", tk.END)
     token_count = estimate_tokens(text)
     prompt_token_label.config(text=f"Prompt Tokens: {token_count}")
+
+def handle_enter_key(event):
+    """
+    Overrides the default behavior of the Return key.
+    If Shift is not held, sends the message and prevents a newline.
+    If Shift is held, allows a newline.
+    """
+    # Check if Shift key is pressed (Shift is typically bit 0x0001 in event.state)
+    if event.state & 0x0001:
+        # Allow Shift+Enter to insert a newline.
+        return None
+    else:
+        send_message()
+        # Return "break" to stop the default newline insertion.
+        return "break"
 
 def create_gui():
     """
@@ -249,6 +261,8 @@ def create_gui():
     input_box = tk.Text(root, height=3, wrap=tk.WORD)
     input_box.pack(padx=10, pady=5, fill=tk.X)
     input_box.bind("<KeyRelease>", update_prompt_token_count)
+    # Bind the Return key to our custom handler.
+    input_box.bind("<Return>", handle_enter_key)
 
     # Prompt token count label
     prompt_token_label = tk.Label(root, text="Prompt Tokens: 0")
