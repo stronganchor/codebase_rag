@@ -77,6 +77,10 @@ def send_request(user_text):
         "options": {"num_ctx": context_limit}
     }
 
+    # If quantization is enabled in the config, add it to the payload options.
+    if config.get("quantize", False):
+        payload["options"]["quantize"] = True
+
     try:
         if stream:
             with requests.post(url, json=payload, stream=True) as response:
@@ -146,7 +150,7 @@ def update_conversation(bot_reply, reasoning_note):
 def send_message():
     """
     Called when the user clicks 'Send' or presses Enter (without Shift). It retrieves the input,
-    checks if it exceeds the context token limit, updates the conversation log,
+    checks if it exceeds the prompt token limit (reserving 4096 tokens for output), updates the conversation log,
     starts the waiting timer, and launches a thread to perform the network request.
     """
     global waiting, start_time
@@ -157,10 +161,15 @@ def send_message():
 
     token_count = estimate_tokens(user_text)
     context_limit = MODELS_CONFIG[model_var.get()].get("context_limit", DEFAULT_CTX)
+    # Reserve 4096 tokens for output.
+    allowed_prompt_tokens = context_limit - 4096
 
-    if token_count > context_limit:
+    if token_count > allowed_prompt_tokens:
         conversation_log.config(state=tk.NORMAL)
-        conversation_log.insert(tk.END, f"Error: Prompt exceeds the maximum allowed token limit ({context_limit} tokens). Please shorten your input.\n\n")
+        conversation_log.insert(
+            tk.END,
+            f"Error: Prompt exceeds the allowed token limit. Maximum prompt tokens allowed is {allowed_prompt_tokens} (total context limit is {context_limit} tokens, reserving 4096 tokens for output), but your prompt is estimated at {token_count} tokens. Please shorten your input.\n\n"
+        )
         conversation_log.config(state=tk.DISABLED)
         conversation_log.yview(tk.END)
         return
