@@ -120,29 +120,78 @@ def send_request(user_text, dynamic_context):
 
 def insert_bot_message(message):
     """
-    Inserts the bot message into the conversation log,
-    formatting <think></think> parts differently.
+    Inserts the bot message into the conversation log.  
+    For portions of the text enclosed in <think> tags, a toggle button is inserted
+    that by default hides the content and allows the user to show/hide it.
     """
     pos = 0
-    for match in re.finditer(r"<think>(.*?)</think>", message):
-        if match.start() > pos:
-            conversation_log.insert(tk.END, message[pos:match.start()])
-        conversation_log.insert(tk.END, match.group(1), "think")
+    # Compile a regex that works across newlines
+    pattern = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+    
+    for match in pattern.finditer(message):
+        # Insert normal text (without <think> content) first.
+        before_text = message[pos:match.start()]
+        if before_text:
+            conversation_log.insert(tk.END, before_text)
+        
+        hidden_content = match.group(1)
+        
+        # Create a container frame to hold the toggle button and the hidden text.
+        container = tk.Frame(conversation_log)
+        
+        # Create a toggle button. The relief is flat so that it appears like a link.
+        toggle_button = tk.Button(container, text="[Show Thought]", relief="flat", borderwidth=0, cursor="hand2")
+        toggle_button.pack(anchor="w")
+        
+        # Create a label for the hidden content. It is styled in a gray italic font.
+        # The wraplength is set to 400 pixels (you can adjust this as needed).
+        hidden_label = tk.Label(container, text=hidden_content, font=("Helvetica", 10, "italic"), fg="gray", wraplength=400, justify="left")
+        hidden_label.pack(anchor="w")
+        hidden_label.pack_forget()  # Hide the label initially
+        
+        # Define the toggle callback function. Using default arguments ensures that each button
+        # has its own associated hidden label.
+        def toggle(lb=hidden_label, btn=toggle_button):
+            if lb.winfo_ismapped():
+                lb.pack_forget()
+                btn.config(text="[Show Thought]")
+            else:
+                lb.pack(anchor="w")
+                btn.config(text="[Hide Thought]")
+        
+        toggle_button.config(command=toggle)
+        
+        # Embed the container (with the button and the hidden label) into the text widget.
+        conversation_log.window_create(tk.END, window=container)
+        
         pos = match.end()
+    
+    # Insert any remaining text after the last <think> section.
     if pos < len(message):
         conversation_log.insert(tk.END, message[pos:])
 
 def update_conversation(bot_reply, reasoning_note):
     """
-    Updates the conversation log with the bot's reply and reasoning time,
-    then stops the timer.
+    Updates the conversation log with the bot's reply and reasoning time.
+    The bot response is now visually separated from the prompt.
     """
     global waiting
     waiting = False  # Stop the timer
     conversation_log.config(state=tk.NORMAL)
+    
+    # Insert reasoning time note.
     conversation_log.insert(tk.END, f"{reasoning_note}\n")
+    
+    # Add extra spacing to visually separate the bot response.
+    conversation_log.insert(tk.END, "\n")
+    
+    # Insert bot label
     conversation_log.insert(tk.END, "Bot: ", "bot_label")
+    conversation_log.insert(tk.END, "\n")
+    
+    # Insert the bot reply with special processing for any <think> blocks.
     insert_bot_message(bot_reply)
+    
     conversation_log.insert(tk.END, "\n\n")
     conversation_log.config(state=tk.DISABLED)
     conversation_log.yview(tk.END)  # Auto-scroll to the latest message
@@ -150,8 +199,8 @@ def update_conversation(bot_reply, reasoning_note):
 
 def send_message():
     """
-    Called when the user clicks 'Send' or presses Enter (without Shift). It retrieves the input,
-    computes a dynamic context limit based on prompt length and an expected output of 4096 tokens,
+    Called when the user clicks 'Send' or presses Enter (without Shift).
+    Retrieves the input, computes a dynamic context limit based on prompt length,
     checks if the prompt is too long, updates the conversation log, starts the waiting timer,
     and launches a thread to perform the network request.
     """
@@ -181,7 +230,7 @@ def send_message():
     # If the prompt is short (<= 4096 tokens), use 8192 tokens.
     # Otherwise, use twice the prompt token count.
     if token_count <= expected_output:
-        dynamic_context = 2 * expected_output  # 8192
+        dynamic_context = 2 * expected_output  # 8192 tokens
     else:
         dynamic_context = 2 * token_count
 
@@ -190,6 +239,8 @@ def send_message():
 
     input_box.delete("1.0", tk.END)
     conversation_log.config(state=tk.NORMAL)
+    
+    # Insert user prompt with a label.
     conversation_log.insert(tk.END, "You: ", "user_label")
     conversation_log.insert(tk.END, f"{user_text}\n")
     conversation_log.config(state=tk.DISABLED)
@@ -266,11 +317,11 @@ def create_gui():
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
+    # Conversation log using a Text widget.
     conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.NORMAL)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     conversation_log.tag_configure("user_label", font=("Helvetica", 10, "bold"))
     conversation_log.tag_configure("bot_label", font=("Helvetica", 10, "bold"))
-    conversation_log.tag_configure("think", foreground="gray", font=("Helvetica", 10, "italic"))
     conversation_log.config(state=tk.DISABLED)
 
     scrollbar = tk.Scrollbar(frame_log, command=conversation_log.yview)
