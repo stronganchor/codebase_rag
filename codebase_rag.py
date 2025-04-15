@@ -181,8 +181,10 @@ def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, t
         results.append((sim, item))
     results.sort(key=lambda x: x[0], reverse=True)
 
-    header = f"User Query:\n{query_text}\n\nRelevant Code Context:\n"
+    # New order: context, then custom instructions, then user query at the end
+    header = f"Relevant Code Context:\n"
     footer = f"\n\nCustom Instructions:\n{custom_instructions}"
+    user_query_section = f"\n\nUser Query:\n{query_text}"
     
     # If the user has chosen to include the entire codebase,
     # first check whether the full prompt would fit the token limit.
@@ -190,7 +192,7 @@ def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, t
         full_context = ""
         for sim, item in results:
             full_context += f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}\n\n"
-        full_prompt = header + full_context + footer
+        full_prompt = header + full_context + footer + user_query_section
         if len(full_prompt) // 4 > max_prompt_tokens:
             messagebox.showwarning("Token Limit Exceeded",
                                    "Including the entire codebase exceeds the max prompt token limit. "
@@ -202,7 +204,7 @@ def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, t
         selected_items = [item for _, item in results[:top_k]]
     
     # Build the prompt gradually while staying under the token limit.
-    base_token_count = len(header + footer) // 4  # approximate token count
+    base_token_count = len(header + footer + user_query_section) // 4  # approximate token count
     available_tokens = max_prompt_tokens - base_token_count
     context_text = ""
     
@@ -220,7 +222,7 @@ def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, t
             available_tokens = 0
             break
 
-    enhanced_prompt = header + context_text + footer
+    enhanced_prompt = header + context_text + footer + user_query_section
     return enhanced_prompt
 
 def compute_repo_hash(repo_path, extensions):
@@ -360,7 +362,7 @@ def copy_enhanced_prompt():
 
 def update_entire_codebase_option_state():
     if global_embeddings_data:
-        header = f"User Query:\n{query_prompt_text.get('1.0', tk.END).strip()}\n\nRelevant Code Context:\n"
+        header = f"Relevant Code Context:\n"
         footer = f"\n\nCustom Instructions:\n{custom_instructions_text.get('1.0', tk.END).strip()}"
         total_context = ""
         for item in global_embeddings_data:
