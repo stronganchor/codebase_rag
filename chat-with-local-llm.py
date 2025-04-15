@@ -3,10 +3,11 @@ import requests
 import threading
 import time
 import json
-import re  # For processing <think> tags
+import re
 import os
 
 # Load model configuration from file located in the same directory as this script
+# This function loads the model configuration JSON file, which contains settings for each available AI model.
 def load_model_config():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "models_config.json")
@@ -20,8 +21,9 @@ DEFAULT_CTX = 8192
 
 def estimate_tokens(text):
     """
-    Estimate token count based on a rough approximation of 1 token per 4 characters.
-    This is a simple heuristic and may not be exact.
+    Estimate the number of tokens in a given text string.
+    Uses a rough heuristic of 1 token per 4 characters, which is a common approximation for LLMs.
+    Returns at least 1 token for any non-empty string.
     """
     return max(1, int(len(text) / 4))
 
@@ -31,8 +33,8 @@ start_time = None
 
 def update_waiting_label():
     """
-    Updates the waiting label with the elapsed time.
-    This function schedules itself until waiting is False.
+    Updates the waiting label in the GUI with the elapsed time since the request was sent.
+    This function reschedules itself every second while waiting is True, and clears the label when waiting is False.
     """
     global waiting, start_time
     if waiting:
@@ -49,6 +51,10 @@ def update_waiting_label():
         waiting_label.config(text="")
 
 def send_request(user_text, dynamic_context):
+    """
+    Sends a request to the selected local LLM server with the user's prompt and dynamic context window.
+    Handles both streaming and non-streaming responses, and updates the GUI with the bot's reply and reasoning time.
+    """
     global waiting
     selected_model = model_var.get()
     config = MODELS_CONFIG[selected_model]
@@ -84,6 +90,7 @@ def send_request(user_text, dynamic_context):
 
     try:
         if stream:
+            # Handle streaming response from the server
             with requests.post(url, json=payload, stream=True) as response:
                 response.raise_for_status()
                 for chunk in response.iter_lines(decode_unicode=True):
@@ -97,6 +104,7 @@ def send_request(user_text, dynamic_context):
                         if data.get("done", False):
                             break
         else:
+            # Handle non-streaming response
             response = requests.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -120,9 +128,9 @@ def send_request(user_text, dynamic_context):
 
 def insert_bot_message(message):
     """
-    Inserts the bot message into the conversation log.  
+    Inserts the bot's message into the conversation log.
     For portions of the text enclosed in <think> tags, a toggle button is inserted
-    that by default hides the content and allows the user to show/hide it.
+    that by default hides the content and allows the user to show/hide it interactively.
     """
     pos = 0
     # Compile a regex that works across newlines
@@ -173,7 +181,7 @@ def insert_bot_message(message):
 def update_conversation(bot_reply, reasoning_note):
     """
     Updates the conversation log with the bot's reply and reasoning time.
-    The bot response is now visually separated from the prompt.
+    The bot response is visually separated from the prompt, and <think> blocks are processed for toggling.
     """
     global waiting
     waiting = False  # Stop the timer
@@ -255,7 +263,7 @@ def send_message():
 
 def update_token_limit_label(*args):
     """
-    Updates the token limit label based on the selected model.
+    Updates the token limit label in the GUI based on the selected model's context window size.
     """
     selected_model = model_var.get()
     context_limit = MODELS_CONFIG.get(selected_model, {}).get("context_limit", DEFAULT_CTX)
@@ -263,7 +271,7 @@ def update_token_limit_label(*args):
 
 def update_prompt_token_count(event=None):
     """
-    Estimates the token count in the prompt field and updates its label.
+    Estimates the token count in the prompt field and updates the prompt token count label in the GUI.
     """
     text = input_box.get("1.0", tk.END)
     token_count = estimate_tokens(text)
@@ -271,9 +279,9 @@ def update_prompt_token_count(event=None):
 
 def handle_enter_key(event):
     """
-    Overrides the default behavior of the Return key.
+    Custom handler for the Return key in the input box.
     If Shift is not held, sends the message and prevents a newline.
-    If Shift is held, allows a newline.
+    If Shift is held, allows a newline to be inserted.
     """
     # Check if Shift key is pressed (Shift is typically bit 0x0001 in event.state)
     if event.state & 0x0001:
@@ -286,7 +294,8 @@ def handle_enter_key(event):
 
 def create_gui():
     """
-    Sets up the Tkinter GUI with a conversation log, input box, waiting label, send button,
+    Sets up the Tkinter GUI for the chat application.
+    Includes a conversation log, input box, waiting label, send button,
     a dropdown to select the AI model, token limit label, and prompt token count label.
     """
     global root, conversation_log, input_box, waiting_label, model_var, token_limit_label, prompt_token_label
