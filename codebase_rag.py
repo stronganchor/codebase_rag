@@ -16,7 +16,7 @@ if not os.path.exists(CLONE_BASE_DIR):
     os.makedirs(CLONE_BASE_DIR)
 
 # Embedding API details (mxbai-embed-large running via Ollama on port 11435)
-EMBED_API_URL = "http://localhost:11435/api/embed"
+EMBED_API_URL = "http://localhost:11434/api/embed"
 EMBED_MODEL = "mxbai-embed-large"
 
 # Code file extensions to process
@@ -168,62 +168,76 @@ def cosine_similarity(vec1, vec2):
         return 0
     return np.dot(vec1, vec2) / (norm1 * norm2)
 
-# -------------------- UPDATED generate_enhanced_prompt --------------------
 def generate_enhanced_prompt(query_text, embeddings_data, custom_instructions, top_k=3,
                              max_prompt_tokens=128000, include_entire_codebase=False):
+    # 1) Embed the user query
     query_embedding = embed_chunk(query_text)
     if query_embedding is None:
         messagebox.showerror("Error", "Failed to embed the query.")
         return ""
+
+    # 2) Score all code chunks by similarity
     results = []
     for item in embeddings_data:
         sim = cosine_similarity(query_embedding, item["embedding"])
         results.append((sim, item))
     results.sort(key=lambda x: x[0], reverse=True)
 
-    # New order: context, then custom instructions, then user query at the end
-    header = f"Relevant Code Context:\n"
+    # 3) Prepare the fixed sections
+    first_query_section = f"User Query:\n{query_text}\n\n"
+    header = "Relevant Code Context:\n"
     footer = f"\n\nCustom Instructions:\n{custom_instructions}"
-    user_query_section = f"\n\nUser Query:\n{query_text}"
-    
-    # If the user has chosen to include the entire codebase,
-    # first check whether the full prompt would fit the token limit.
+    repeat_query_section = f"\n\nRepeating User Query:\n{query_text}"
+
+    # 4) Choose which chunks to include
     if include_entire_codebase:
-        full_context = ""
-        for sim, item in results:
-            full_context += f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}\n\n"
-        full_prompt = header + full_context + footer + user_query_section
+        # assemble everything, but fall back if too big
+        full_context = "".join(
+            f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}\n\n"
+            for _, item in results
+        )
+        full_prompt = first_query_section + header + full_context + footer + repeat_query_section
         if len(full_prompt) // 4 > max_prompt_tokens:
-            messagebox.showwarning("Token Limit Exceeded",
-                                   "Including the entire codebase exceeds the max prompt token limit. "
-                                   "Falling back to top relevant chunks.")
+            messagebox.showwarning(
+                "Token Limit Exceeded",
+                "Including the entire codebase exceeds the max prompt token limit. "
+                "Falling back to top relevant chunks."
+            )
             selected_items = [item for _, item in results[:top_k]]
         else:
             selected_items = [item for _, item in results]
     else:
         selected_items = [item for _, item in results[:top_k]]
-    
-    # Build the prompt gradually while staying under the token limit.
-    base_token_count = len(header + footer + user_query_section) // 4  # approximate token count
-    available_tokens = max_prompt_tokens - base_token_count
+
+    # 5) Build the context under the token limit
+    base_tokens = (len(first_query_section + header + footer + repeat_query_section) // 4)
+    available_tokens = max_prompt_tokens - base_tokens
     context_text = ""
-    
     for item in selected_items:
-        chunk_text = f"File: {item['file']} (Chunk {item['chunk_index']}):\n{item['chunk']}\n\n"
+        chunk_text = (
+            f"File: {item['file']} (Chunk {item['chunk_index']}):\n"
+            f"{item['chunk']}\n\n"
+        )
         chunk_tokens = len(chunk_text) // 4
-        if available_tokens - chunk_tokens >= 0:
+        if available_tokens >= chunk_tokens:
             context_text += chunk_text
             available_tokens -= chunk_tokens
         else:
-            # Add a truncated version of the chunk to fill the remaining space.
+            # truncate to fit
             max_chars = available_tokens * 4
-            truncated_chunk = chunk_text[:max_chars]
-            context_text += truncated_chunk
-            available_tokens = 0
+            context_text += chunk_text[:max_chars]
             break
 
-    enhanced_prompt = header + context_text + footer + user_query_section
+    # 6) Assemble final prompt
+    enhanced_prompt = (
+        first_query_section
+        + header
+        + context_text
+        + footer
+        + repeat_query_section
+    )
     return enhanced_prompt
+
 
 def compute_repo_hash(repo_path, extensions):
     """Compute a hash based on file paths, modification times, and sizes."""
