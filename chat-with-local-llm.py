@@ -34,7 +34,6 @@ def estimate_tokens(text: str) -> int:
 waiting: bool = False
 start_time: float | None = None
 
-# These will be populated in create_gui()
 root = None
 conversation_log = None
 input_box = None
@@ -43,20 +42,22 @@ model_var = None
 token_limit_label = None
 prompt_token_label = None
 
+# Tracks the text index where the current streamed reply starts
+_current_stream_start = None
+
 # ---------------------------------------------------------------------------
 # Real‑time waiting indicator
 # ---------------------------------------------------------------------------
 
 def update_waiting_label():
-    """Refresh the little timer every second while the model is thinking."""
     global waiting, start_time
     if waiting:
         elapsed = time.time() - start_time
         if elapsed < 60:
             waiting_label.config(text=f"Waiting: {int(elapsed)}s")
         else:
-            minutes, seconds = divmod(int(elapsed), 60)
-            waiting_label.config(text=f"Waiting: {minutes}m {seconds}s")
+            m, s = divmod(int(elapsed), 60)
+            waiting_label.config(text=f"Waiting: {m}m {s}s")
         root.after(1000, update_waiting_label)
     else:
         waiting_label.config(text="")
@@ -66,35 +67,44 @@ def update_waiting_label():
 # ---------------------------------------------------------------------------
 
 def append_stream_chunk(text: str):
-    """Thread‑safe GUI append used only for live token streaming."""
     conversation_log.config(state=tk.NORMAL)
     conversation_log.insert(tk.END, text)
     conversation_log.config(state=tk.DISABLED)
     conversation_log.yview(tk.END)
 
 # ---------------------------------------------------------------------------
+# Finalise streamed answer: add reasoning time and clear waiting flag
+# ---------------------------------------------------------------------------
+
+def finalize_stream(reasoning_note: str):
+    global waiting
+    waiting = False
+    conversation_log.config(state=tk.NORMAL)
+    conversation_log.insert(tk.END, f"\n\n{reasoning_note}\n\n")
+    conversation_log.config(state=tk.DISABLED)
+    conversation_log.yview(tk.END)
+    waiting_label.config(text="")
+
+# ---------------------------------------------------------------------------
 # Network request
 # ---------------------------------------------------------------------------
 
 def send_request(user_text: str, dynamic_context: int):
-    """Send the prompt to the chosen local LLM and stream or batch the reply."""
-    global waiting
+    global waiting, _current_stream_start
 
-    selected_model = model_var.get()
-    cfg = MODELS_CONFIG[selected_model]
-
+    cfg = MODELS_CONFIG[model_var.get()]
     url = f"http://localhost:{cfg['port']}/api/{cfg['endpoint']}"
     payload_field = cfg["payload_field"]
-    payload_model = cfg.get("payload_model", selected_model)
+    payload_model = cfg.get("payload_model", model_var.get())
     stream_flag = cfg["stream"]
 
-    # Build request payload
+    # Build payload
     if payload_field == "prompt":
         payload_content = user_text
     elif payload_field == "messages":
         payload_content = [{"role": "user", "content": user_text}]
     else:
-        payload_content = user_text  # fallback
+        payload_content = user_text
 
     payload = {
         "model": payload_model,
@@ -109,9 +119,8 @@ def send_request(user_text: str, dynamic_context: int):
 
     try:
         if stream_flag:
-            # ---------------------------------------------------------------
-            # Streaming path: iterate over the HTTP chunks and show live text
-            # ---------------------------------------------------------------
+            # Insert Bot label once at the beginning of the stream
+            root.after(0, lambda: _start_stream_message())
             with requests.post(url, json=payload, stream=True) as response:
                 response.raise_for_status()
                 for chunk in response.iter_lines(decode_unicode=True):
@@ -123,15 +132,14 @@ def send_request(user_text: str, dynamic_context: int):
                         continue
                     chunk_text = data.get("response", "")
                     if chunk_text:
-                        # Live update in the GUI thread
-                        root.after(0, append_stream_chunk, chunk_text)
                         bot_reply += chunk_text
+                        root.after(0, append_stream_chunk, chunk_text)
                     if data.get("done", False):
                         break
+            # after stream completes add reasoning note
+            reasoning_note = _reasoning_note()
+            root.after(0, finalize_stream, reasoning_note)
         else:
-            # ---------------------
-            # Non‑streaming request
-            # ---------------------
             response = requests.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -139,75 +147,53 @@ def send_request(user_text: str, dynamic_context: int):
                 bot_reply = data.get("message", {}).get("content", "<no content>")
             else:
                 bot_reply = data.get("response", "")
+            reasoning_note = _reasoning_note()
+            root.after(0, _insert_full_bot_message, bot_reply, reasoning_note)
     except requests.exceptions.RequestException as e:
-        bot_reply = f"Error: {e}"
-
-    # ------------------------------------------
-    # Final GUI update once the reply is finished
-    # ------------------------------------------
-    reasoning_time = time.time() - start_time
-    minutes, seconds = divmod(int(reasoning_time), 60)
-    reasoning_note = (
-        f"Reasoned for {seconds}s." if reasoning_time < 60 else f"Reasoned for {minutes}m {seconds}s."
-    )
-    root.after(0, update_conversation, bot_reply, reasoning_note)
+        err = f"Error: {e}"
+        reasoning_note = _reasoning_note()
+        if stream_flag:
+            root.after(0, append_stream_chunk, err)
+            root.after(0, finalize_stream, reasoning_note)
+        else:
+            root.after(0, _insert_full_bot_message, err, reasoning_note)
 
 # ---------------------------------------------------------------------------
-# Conversation log helpers
+# Helper callbacks for GUI insertion
 # ---------------------------------------------------------------------------
 
-def insert_bot_message(message: str):
-    """Insert bot text; fold <think>...</think> sections behind toggles."""
-    pos = 0
-    pattern = re.compile(r"<think>(.*?)</think>", re.DOTALL)
-
-    for match in pattern.finditer(message):
-        before = message[pos:match.start()]
-        if before:
-            conversation_log.insert(tk.END, before)
-
-        hidden = match.group(1)
-        container = tk.Frame(conversation_log)
-        toggle = tk.Button(container, text="[Show Thought]", relief="flat", borderwidth=0, cursor="hand2")
-        toggle.pack(anchor="w")
-        hidden_lbl = tk.Label(container, text=hidden, font=("Helvetica", 10, "italic"), fg="gray", wraplength=400, justify="left")
-        hidden_lbl.pack(anchor="w")
-        hidden_lbl.pack_forget()
-
-        def toggle_cb(lb=hidden_lbl, btn=toggle):
-            if lb.winfo_ismapped():
-                lb.pack_forget(); btn.config(text="[Show Thought]")
-            else:
-                lb.pack(anchor="w"); btn.config(text="[Hide Thought]")
-        toggle.config(command=toggle_cb)
-        conversation_log.window_create(tk.END, window=container)
-        pos = match.end()
-
-    if pos < len(message):
-        conversation_log.insert(tk.END, message[pos:])
+def _start_stream_message():
+    """Insert Bot label once and remember where the text starts."""
+    global _current_stream_start
+    conversation_log.config(state=tk.NORMAL)
+    conversation_log.insert(tk.END, "Bot: ", "bot_label")
+    _current_stream_start = conversation_log.index(tk.END)
+    conversation_log.config(state=tk.DISABLED)
 
 
-def update_conversation(bot_reply: str, reasoning_note: str):
-    """Finalise the assistant message and stop the waiting timer."""
+def _insert_full_bot_message(message: str, reasoning_note: str):
     global waiting
     waiting = False
-
     conversation_log.config(state=tk.NORMAL)
-    conversation_log.insert(tk.END, f"{reasoning_note}\n\n")
-    conversation_log.insert(tk.END, "Bot: ", "bot_label")
-    conversation_log.insert(tk.END, "\n")
-    insert_bot_message(bot_reply)
-    conversation_log.insert(tk.END, "\n\n")
+    conversation_log.insert(tk.END, f"Bot: ", "bot_label")
+    conversation_log.insert(tk.END, f"\n{message}\n\n{reasoning_note}\n\n")
     conversation_log.config(state=tk.DISABLED)
     conversation_log.yview(tk.END)
     waiting_label.config(text="")
+
+
+def _reasoning_note() -> str:
+    elapsed = time.time() - start_time
+    if elapsed < 60:
+        return f"Reasoned for {int(elapsed)}s."
+    m, s = divmod(int(elapsed), 60)
+    return f"Reasoned for {m}m {s}s."
 
 # ---------------------------------------------------------------------------
 # Send‑button handler
 # ---------------------------------------------------------------------------
 
 def send_message(event=None):
-    """Grab user text, enforce context limits, spawn the worker thread."""
     global waiting, start_time
 
     user_text = input_box.get("1.0", tk.END).strip()
@@ -221,16 +207,13 @@ def send_message(event=None):
 
     allowed_prompt = cfg_ctx - expected_out
     if token_count > allowed_prompt:
-        conversation_log.config(state=tk.NORMAL)
-        conversation_log.insert(tk.END, f"Error: Prompt exceeds limit ({allowed_prompt} tokens).\n\n")
-        conversation_log.config(state=tk.DISABLED)
-        conversation_log.yview(tk.END)
+        _error_to_log(f"Prompt exceeds limit ({allowed_prompt} tokens).")
         return
 
     dynamic_ctx = 2 * expected_out if token_count <= expected_out else 2 * token_count
     dynamic_ctx = min(dynamic_ctx, cfg_ctx)
 
-    # Update GUI with user message
+    # GUI: show user message
     input_box.delete("1.0", tk.END)
     conversation_log.config(state=tk.NORMAL)
     conversation_log.insert(tk.END, "You: ", "user_label")
@@ -243,6 +226,13 @@ def send_message(event=None):
     update_waiting_label()
 
     threading.Thread(target=send_request, args=(user_text, dynamic_ctx), daemon=True).start()
+
+
+def _error_to_log(msg: str):
+    conversation_log.config(state=tk.NORMAL)
+    conversation_log.insert(tk.END, f"Error: {msg}\n\n")
+    conversation_log.config(state=tk.DISABLED)
+    conversation_log.yview(tk.END)
 
 # ---------------------------------------------------------------------------
 # GUI helpers — token limit and prompt token counter
@@ -263,9 +253,9 @@ def update_prompt_token_count(event=None):
 
 def handle_enter_key(event):
     if event.state & 0x0001:  # Shift pressed
-        return None  # allow newline
+        return None
     send_message()
-    return "break"  # suppress default newline
+    return "break"
 
 # ---------------------------------------------------------------------------
 # Build the Tkinter interface
@@ -276,9 +266,9 @@ def create_gui():
     global model_var, token_limit_label, prompt_token_label
 
     root = tk.Tk()
-    root.title("QwQ Chat – Streaming Edition")
+    root.title("QwQ Chat – Streaming Edition")
 
-    # Top bar: model selector & token limit
+    # Top bar
     top = tk.Frame(root)
     top.pack(padx=10, pady=5, fill=tk.X)
 
@@ -292,7 +282,7 @@ def create_gui():
     token_limit_label.pack(side=tk.LEFT, padx=5)
     update_token_limit_label()
 
-    # Conversation log + scrollbar
+    # Conversation log
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
@@ -309,7 +299,7 @@ def create_gui():
     waiting_label = tk.Label(root, text="", font=("Helvetica", 10))
     waiting_label.pack(pady=5)
 
-    # Input + token counter + send
+    # Input + send
     input_box = tk.Text(root, height=3, wrap=tk.WORD)
     input_box.pack(padx=10, pady=5, fill=tk.X)
     input_box.bind("<KeyRelease>", update_prompt_token_count)
