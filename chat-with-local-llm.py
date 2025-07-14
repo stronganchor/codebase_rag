@@ -170,17 +170,48 @@ def _start_stream_message():
     _current_stream_start = conversation_log.index(tk.END)
     conversation_log.config(state=tk.DISABLED)
 
-
 def _insert_full_bot_message(message: str, reasoning_note: str):
+    """
+    Inserts a complete Bot response, parsing out any ```code``` fences
+    and displaying them in a monospace region with a Copy button.
+    """
     global waiting
     waiting = False
     conversation_log.config(state=tk.NORMAL)
-    conversation_log.insert(tk.END, f"Bot: ", "bot_label")
-    conversation_log.insert(tk.END, f"\n{message}\n\n{reasoning_note}\n\n")
+
+    # Bot label
+    conversation_log.insert(tk.END, "Bot: ", "bot_label")
+
+    # Split on code fences
+    parts = re.split(r"(```.*?```)", message, flags=re.DOTALL)
+    for part in parts:
+        if part.startswith("```") and part.endswith("```"):
+            # extract code (optionally with language)
+            m = re.match(r"```(\w+)?\n(.*?)```", part, flags=re.DOTALL)
+            code_text = m.group(2) if m else part.strip("`")
+            # insert a Copy button
+            copy_btn = tk.Button(
+                conversation_log,
+                text="Copy Code",
+                command=lambda txt=code_text: (
+                    root.clipboard_clear(),
+                    root.clipboard_append(txt)
+                )
+            )
+            conversation_log.window_create(tk.END, window=copy_btn)
+            conversation_log.insert(tk.END, "\n")
+            # insert the code block itself
+            conversation_log.insert(tk.END, code_text, "code")
+            conversation_log.insert(tk.END, "\n")
+        else:
+            # plain text
+            conversation_log.insert(tk.END, part)
+
+    # reasoning note
+    conversation_log.insert(tk.END, f"\n{reasoning_note}\n\n")
     conversation_log.config(state=tk.DISABLED)
     conversation_log.yview(tk.END)
     waiting_label.config(text="")
-
 
 def _reasoning_note() -> str:
     elapsed = time.time() - start_time
@@ -266,7 +297,7 @@ def create_gui():
     global model_var, token_limit_label, prompt_token_label
 
     root = tk.Tk()
-    root.title("QwQ Chat – Streaming Edition")
+    root.title("Chat With Local LLM")  # <-- changed title
 
     # Top bar
     top = tk.Frame(root)
@@ -288,8 +319,13 @@ def create_gui():
 
     conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.NORMAL)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    # existing tags
     conversation_log.tag_config("user_label", font=("Helvetica", 10, "bold"))
-    conversation_log.tag_config("bot_label", font=("Helvetica", 10, "bold"))
+    conversation_log.tag_config("bot_label",  font=("Helvetica", 10, "bold"))
+    # new tag for code blocks
+    conversation_log.tag_config("code",      font=("Courier",   10), background="#f7f7f7")
+
     conversation_log.config(state=tk.DISABLED)
 
     scrollbar = tk.Scrollbar(frame_log, command=conversation_log.yview)
