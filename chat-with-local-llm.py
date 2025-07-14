@@ -20,12 +20,16 @@ def load_model_config():
 MODELS_CONFIG = load_model_config()
 DEFAULT_CTX = 8192  # fallback context length if not in the config
 
+# Streaming-path code formatting state
+stream_in_code = False
+stream_code_tag = "code_default"
+
 # ---------------------------------------------------------------------------
 # Tiny utilities
 # ---------------------------------------------------------------------------
 
 def estimate_tokens(text: str) -> int:
-    """Roughly 1 token ≈ 4 chars. Guarantees at least one token."""
+    """Roughly 1 token ≈ 4 chars. Guarantees at least one token."""
     return max(1, len(text) // 4)
 
 # ---------------------------------------------------------------------------
@@ -46,7 +50,7 @@ prompt_token_label = None
 _current_stream_start = None
 
 # ---------------------------------------------------------------------------
-# Real‑time waiting indicator
+# Real-time waiting indicator
 # ---------------------------------------------------------------------------
 
 def update_waiting_label():
@@ -63,14 +67,59 @@ def update_waiting_label():
         waiting_label.config(text="")
 
 # ---------------------------------------------------------------------------
+# Helper to insert formatted text with code blocks
+# ---------------------------------------------------------------------------
+def insert_formatted_text(text: str, reset_code: bool = False):
+    """
+    Shared formatter for both streaming and full responses.
+    Strips ``` fences, toggles code blocks, inserts dividers,
+    and applies language-specific tags.
+    """
+    global stream_in_code, stream_code_tag
+    if reset_code:
+        stream_in_code = False
+        stream_code_tag = "code_default"
+
+    conversation_log.config(state=tk.NORMAL)
+    for raw_line in text.splitlines(keepends=True):
+        stripped = raw_line.lstrip()
+        # Fence toggle
+        if stripped.startswith("```"):
+            if stream_in_code:
+                # closing fence: divider below
+                divider = tk.Frame(conversation_log, height=1, bg="#c0c0c0", bd=0, relief=tk.FLAT)
+                conversation_log.window_create(tk.END, window=divider)
+                conversation_log.insert(tk.END, "\n")
+                stream_in_code = False
+            else:
+                # opening fence: pick tag and divider above
+                lang = stripped.strip('`').strip().lower()
+                stream_code_tag = {
+                    'python': 'code_python', 'py': 'code_python',
+                    'bash': 'code_sh', 'sh': 'code_sh', 'shell': 'code_sh',
+                    'js': 'code_js', 'javascript': 'code_js'
+                }.get(lang, 'code_default')
+                divider = tk.Frame(conversation_log, height=1, bg="#c0c0c0", bd=0, relief=tk.FLAT)
+                conversation_log.window_create(tk.END, window=divider)
+                conversation_log.insert(tk.END, "\n")
+                stream_in_code = True
+            continue
+
+        # Insert line with appropriate tag
+        if stream_in_code:
+            conversation_log.insert(tk.END, raw_line, stream_code_tag)
+        else:
+            conversation_log.insert(tk.END, raw_line)
+
+    conversation_log.config(state=tk.DISABLED)
+    conversation_log.yview(tk.END)
+
+# ---------------------------------------------------------------------------
 # Helper that appends streamed chunks to the Text widget as they arrive
 # ---------------------------------------------------------------------------
 
 def append_stream_chunk(text: str):
-    conversation_log.config(state=tk.NORMAL)
-    conversation_log.insert(tk.END, text)
-    conversation_log.config(state=tk.DISABLED)
-    conversation_log.yview(tk.END)
+    insert_formatted_text(text)
 
 # ---------------------------------------------------------------------------
 # Finalise streamed answer: add reasoning time and clear waiting flag
@@ -119,8 +168,7 @@ def send_request(user_text: str, dynamic_context: int):
 
     try:
         if stream_flag:
-            # Insert Bot label once at the beginning of the stream
-            root.after(0, lambda: _start_stream_message())
+            root.after(0, _start_stream_message)
             with requests.post(url, json=payload, stream=True) as response:
                 response.raise_for_status()
                 for chunk in response.iter_lines(decode_unicode=True):
@@ -136,7 +184,6 @@ def send_request(user_text: str, dynamic_context: int):
                         root.after(0, append_stream_chunk, chunk_text)
                     if data.get("done", False):
                         break
-            # after stream completes add reasoning note
             reasoning_note = _reasoning_note()
             root.after(0, finalize_stream, reasoning_note)
         else:
@@ -163,7 +210,6 @@ def send_request(user_text: str, dynamic_context: int):
 # ---------------------------------------------------------------------------
 
 def _start_stream_message():
-    """Insert Bot label once and remember where the text starts."""
     global _current_stream_start
     conversation_log.config(state=tk.NORMAL)
     conversation_log.insert(tk.END, "Bot: ", "bot_label")
@@ -171,43 +217,10 @@ def _start_stream_message():
     conversation_log.config(state=tk.DISABLED)
 
 def _insert_full_bot_message(message: str, reasoning_note: str):
-    """
-    Inserts a complete Bot response, parsing out any ```code``` fences
-    and displaying them in a monospace region with a Copy button.
-    """
-    global waiting
-    waiting = False
+    # reset code state before full message
+    insert_formatted_text(message, reset_code=True)
+    # then reasoning note
     conversation_log.config(state=tk.NORMAL)
-
-    # Bot label
-    conversation_log.insert(tk.END, "Bot: ", "bot_label")
-
-    # Split on code fences
-    parts = re.split(r"(```.*?```)", message, flags=re.DOTALL)
-    for part in parts:
-        if part.startswith("```") and part.endswith("```"):
-            # extract code (optionally with language)
-            m = re.match(r"```(\w+)?\n(.*?)```", part, flags=re.DOTALL)
-            code_text = m.group(2) if m else part.strip("`")
-            # insert a Copy button
-            copy_btn = tk.Button(
-                conversation_log,
-                text="Copy Code",
-                command=lambda txt=code_text: (
-                    root.clipboard_clear(),
-                    root.clipboard_append(txt)
-                )
-            )
-            conversation_log.window_create(tk.END, window=copy_btn)
-            conversation_log.insert(tk.END, "\n")
-            # insert the code block itself
-            conversation_log.insert(tk.END, code_text, "code")
-            conversation_log.insert(tk.END, "\n")
-        else:
-            # plain text
-            conversation_log.insert(tk.END, part)
-
-    # reasoning note
     conversation_log.insert(tk.END, f"\n{reasoning_note}\n\n")
     conversation_log.config(state=tk.DISABLED)
     conversation_log.yview(tk.END)
@@ -221,7 +234,7 @@ def _reasoning_note() -> str:
     return f"Reasoned for {m}m {s}s."
 
 # ---------------------------------------------------------------------------
-# Send‑button handler
+# Send-button handler
 # ---------------------------------------------------------------------------
 
 def send_message(event=None):
@@ -279,7 +292,7 @@ def update_prompt_token_count(event=None):
     prompt_token_label.config(text=f"Prompt Tokens: {count}")
 
 # ---------------------------------------------------------------------------
-# <Shift>‑Enter vs Enter behaviour
+# <Shift>-Enter vs Enter behaviour
 # ---------------------------------------------------------------------------
 
 def handle_enter_key(event):
@@ -297,9 +310,9 @@ def create_gui():
     global model_var, token_limit_label, prompt_token_label
 
     root = tk.Tk()
-    root.title("Chat With Local LLM")  # <-- changed title
+    root.title("Chat With Local LLM")
 
-    # Top bar
+    # ── top bar ───────────────────────────────────────────────
     top = tk.Frame(root)
     top.pack(padx=10, pady=5, fill=tk.X)
 
@@ -313,29 +326,37 @@ def create_gui():
     token_limit_label.pack(side=tk.LEFT, padx=5)
     update_token_limit_label()
 
-    # Conversation log
+    # ── conversation log ─────────────────────────────────────
     frame_log = tk.Frame(root)
     frame_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
     conversation_log = tk.Text(frame_log, wrap=tk.WORD, state=tk.NORMAL)
     conversation_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    # existing tags
+    # label & default code styles
     conversation_log.tag_config("user_label", font=("Helvetica", 10, "bold"))
     conversation_log.tag_config("bot_label",  font=("Helvetica", 10, "bold"))
-    # new tag for code blocks
-    conversation_log.tag_config("code",      font=("Courier",   10), background="#f7f7f7")
-
+    conversation_log.tag_config(
+        "code_default",
+        font=("Courier", 10, "bold"),
+        foreground="dark green",
+        background="#f3f3f3"
+    )
+    # optional per-language colours
+    conversation_log.tag_config("code_python", foreground="#006400")   # same as default
+    conversation_log.tag_config("code_sh",     foreground="#8B008B")   # dark-magenta
+    conversation_log.tag_config("code_js",     foreground="#005d8b")   # teal
     conversation_log.config(state=tk.DISABLED)
 
     scrollbar = tk.Scrollbar(frame_log, command=conversation_log.yview)
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     conversation_log.config(yscrollcommand=scrollbar.set)
 
+    # ── waiting label ────────────────────────────────────────
     waiting_label = tk.Label(root, text="", font=("Helvetica", 10))
     waiting_label.pack(pady=5)
 
-    # Input + send
+    # ── input box + send ─────────────────────────────────────
     input_box = tk.Text(root, height=3, wrap=tk.WORD)
     input_box.pack(padx=10, pady=5, fill=tk.X)
     input_box.bind("<KeyRelease>", update_prompt_token_count)
