@@ -8,6 +8,15 @@
     "stream": true,
     "quantize": true
   },
+  "llama3.1:8b": {
+    "context_limit": 131072,
+    "port": 11434,
+    "endpoint": "generate",
+    "payload_field": "prompt",
+    "payload_model": "llama3.1:8b",
+    "stream": true,
+    "quantize": false
+  },
   "Deepseek R1 (7b)": {
     "context_limit": 32768,
     "port": 11434,
@@ -81,7 +90,7 @@
     "quantize": true
   },
   "llama3.1:8b": {
-    "context_limit": 100000,
+    "context_limit": 128000,
     "port": 11434,
     "endpoint": "generate",
     "payload_field": "prompt",
