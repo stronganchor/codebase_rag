@@ -71,6 +71,15 @@
     "stream": false,
     "quantize": true
   },
+  "gemma3n": {
+    "context_limit": 32768,
+    "port": 11434,
+    "endpoint": "chat",
+    "payload_field": "messages",
+    "payload_model": "gemma3n",
+    "stream": false,
+    "quantize": true
+  },
   "gemma3:27b-it-qat": {
     "context_limit": 32768,
     "port": 11434,
@@ -97,6 +106,15 @@
     "payload_model": "llama3.1:8b",
     "stream": true,
     "quantize": false
+  },
+  "Llama‑4 Scout": {
+    "context_limit": 8000,
+    "port": 11434,
+    "endpoint": "chat",
+    "payload_field": "prompt",
+    "payload_model": "llama4:scout",
+    "stream": true,
+    "quantize": true
   },
   "codellama:7b": {
     "context_limit": 16384,
